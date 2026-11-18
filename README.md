@@ -155,4 +155,4 @@ npm test        # node --test, offline: no network, no gh, no claude, no Pharo
 npm run check   # syntax check
 ```
 
-Apache-2.0.
+MIT.

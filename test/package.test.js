@@ -25,7 +25,7 @@ test("plugin.json and marketplace.json invariants", () => {
   assert.equal(market.plugins[0].source, "./");
   for (const forbidden of ["engines", "dependencies", "$schema"]) assert.ok(!(forbidden in plugin), forbidden);
   assert.deepEqual(fs.readdirSync(path.join(root, ".claude-plugin")).sort(), ["marketplace.json", "plugin.json"]);
-  assert.equal(plugin.license, "Apache-2.0");
+  assert.equal(plugin.license, "MIT");
 });
 
 test("package.json has no dependencies and matches the plugin version", () => {

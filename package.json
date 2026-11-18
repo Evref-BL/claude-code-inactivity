@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Task scheduler spreading GitHub Projects tasks over team members' Claude accounts (Pharo projects, beta).",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "bin": {
     "inactivity": "bin/inactivity.js"
   },

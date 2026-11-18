@@ -9,6 +9,6 @@
   },
   "homepage": "https://github.com/Evref-BL/claude-code-inactivity",
   "repository": "https://github.com/Evref-BL/claude-code-inactivity",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "keywords": ["pharo", "smalltalk", "scheduler", "github-projects", "agents"]
 }
