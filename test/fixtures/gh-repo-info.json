@@ -1,0 +1,12 @@
+{
+  "_comment": "// UNVERIFIED against live API: hand-written from the documented GraphQL shapes",
+  "data": {
+    "repository": {
+      "id": "R_1",
+      "url": "https://github.com/acme/app",
+      "defaultBranchRef": {
+        "name": "main"
+      }
+    }
+  }
+}

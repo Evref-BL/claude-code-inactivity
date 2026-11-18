@@ -1,0 +1,249 @@
+{
+  "_comment": "// UNVERIFIED against live API: hand-written from the documented GraphQL shapes",
+  "data": {
+    "node": {
+      "items": {
+        "pageInfo": {
+          "hasNextPage": true,
+          "endCursor": "cur2"
+        },
+        "nodes": [
+          {
+            "id": "PVTI_3",
+            "type": "DRAFT_ISSUE",
+            "isArchived": false,
+            "fieldValues": {
+              "nodes": [
+                {
+                  "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                  "name": "Todo",
+                  "optionId": "o_Todo",
+                  "field": {
+                    "name": "Status"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                  "name": "P1",
+                  "optionId": "o_p",
+                  "field": {
+                    "name": "Priority"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                  "name": "easy",
+                  "optionId": "o_d",
+                  "field": {
+                    "name": "difficulty"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldTextValue",
+                  "text": "@bob",
+                  "field": {
+                    "name": "Agent"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldDateValue"
+                },
+                {}
+              ]
+            },
+            "content": {
+              "__typename": "DraftIssue",
+              "title": "draft"
+            }
+          },
+          {
+            "id": "PVTI_4",
+            "type": "ISSUE",
+            "isArchived": true,
+            "fieldValues": {
+              "nodes": [
+                {
+                  "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                  "name": "Todo",
+                  "optionId": "o_Todo",
+                  "field": {
+                    "name": "Status"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                  "name": "P1",
+                  "optionId": "o_p",
+                  "field": {
+                    "name": "Priority"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                  "name": "easy",
+                  "optionId": "o_d",
+                  "field": {
+                    "name": "difficulty"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldTextValue",
+                  "text": "@bob",
+                  "field": {
+                    "name": "Agent"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldDateValue"
+                },
+                {}
+              ]
+            },
+            "content": {
+              "__typename": "Issue",
+              "id": "I_4",
+              "number": 4,
+              "title": "Task 4",
+              "body": "Body 4",
+              "url": "https://github.com/acme/app/issues/4",
+              "state": "OPEN",
+              "updatedAt": "2026-11-18T10:00:00Z",
+              "authorAssociation": "MEMBER",
+              "author": {
+                "login": "alice",
+                "__typename": "User"
+              },
+              "repository": {
+                "nameWithOwner": "acme/app"
+              },
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  },
+                  {
+                    "name": "priority:P1"
+                  }
+                ]
+              },
+              "comments": {
+                "totalCount": 1,
+                "pageInfo": {
+                  "hasPreviousPage": false,
+                  "startCursor": "c0"
+                },
+                "nodes": [
+                  {
+                    "id": "IC_1",
+                    "databaseId": 9001,
+                    "author": {
+                      "login": "bob",
+                      "__typename": "User"
+                    },
+                    "createdAt": "2026-11-19T04:01:00Z",
+                    "lastEditedAt": null,
+                    "isMinimized": false,
+                    "body": "hello"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "id": "PVTI_5",
+            "type": "PULL_REQUEST",
+            "isArchived": false,
+            "fieldValues": {
+              "nodes": [
+                {
+                  "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                  "name": "Todo",
+                  "optionId": "o_Todo",
+                  "field": {
+                    "name": "Status"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                  "name": "P1",
+                  "optionId": "o_p",
+                  "field": {
+                    "name": "Priority"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                  "name": "easy",
+                  "optionId": "o_d",
+                  "field": {
+                    "name": "difficulty"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldTextValue",
+                  "text": "@bob",
+                  "field": {
+                    "name": "Agent"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldDateValue"
+                },
+                {}
+              ]
+            },
+            "content": {
+              "__typename": "PullRequest",
+              "id": "I_5",
+              "number": 5,
+              "title": "Task 5",
+              "body": "Body 5",
+              "url": "https://github.com/acme/app/issues/5",
+              "state": "OPEN",
+              "updatedAt": "2026-11-18T10:00:00Z",
+              "authorAssociation": "MEMBER",
+              "author": {
+                "login": "alice",
+                "__typename": "User"
+              },
+              "repository": {
+                "nameWithOwner": "acme/app"
+              },
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  },
+                  {
+                    "name": "priority:P1"
+                  }
+                ]
+              },
+              "comments": {
+                "totalCount": 1,
+                "pageInfo": {
+                  "hasPreviousPage": false,
+                  "startCursor": "c0"
+                },
+                "nodes": [
+                  {
+                    "id": "IC_1",
+                    "databaseId": 9001,
+                    "author": {
+                      "login": "bob",
+                      "__typename": "User"
+                    },
+                    "createdAt": "2026-11-19T04:01:00Z",
+                    "lastEditedAt": null,
+                    "isMinimized": false,
+                    "body": "hello"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

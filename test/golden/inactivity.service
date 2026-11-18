@@ -1,0 +1,10 @@
+[Unit]
+Description=inactivity tick (claim, resolve and run board tasks)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/alice/.local/state/inactivity
+Environment=PATH=/home/alice/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/bin/node /home/alice/.local/state/inactivity/app/current/bin/inactivity.js tick --json
+StandardOutput=append:/home/alice/.local/state/inactivity/logs/tick.log
+StandardError=append:/home/alice/.local/state/inactivity/logs/tick.log

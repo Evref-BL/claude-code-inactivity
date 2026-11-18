@@ -1,0 +1,21 @@
+{
+  "_comment": "// UNVERIFIED against live API: hand-written from the documented GraphQL shapes",
+  "data": {
+    "addComment": {
+      "commentEdge": {
+        "node": {
+          "id": "IC_40",
+          "databaseId": 9040,
+          "author": {
+            "login": "alice",
+            "__typename": "User"
+          },
+          "createdAt": "2026-11-19T04:40:00Z",
+          "lastEditedAt": null,
+          "isMinimized": false,
+          "body": "posted body"
+        }
+      }
+    }
+  }
+}

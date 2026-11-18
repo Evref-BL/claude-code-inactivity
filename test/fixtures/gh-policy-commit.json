@@ -1,0 +1,19 @@
+{
+  "_comment": "// UNVERIFIED against live API: hand-written from the documented GraphQL shapes",
+  "data": {
+    "repository": {
+      "defaultBranchRef": {
+        "target": {
+          "history": {
+            "nodes": [
+              {
+                "oid": "abc123",
+                "committedDate": "2026-11-10T09:00:00Z"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

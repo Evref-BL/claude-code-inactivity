@@ -1,0 +1,4 @@
+# BEGIN inactivity
+PATH=/home/alice/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+*/10 * * * * /usr/local/bin/node /home/alice/.local/state/inactivity/app/current/bin/inactivity.js tick --json >> /home/alice/.local/state/inactivity/logs/tick.log 2>&1
+# END inactivity

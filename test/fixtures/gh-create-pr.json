@@ -1,0 +1,12 @@
+{
+  "_comment": "// UNVERIFIED against live API: hand-written from the documented GraphQL shapes",
+  "data": {
+    "createPullRequest": {
+      "pullRequest": {
+        "id": "PR_1",
+        "number": 12,
+        "url": "https://github.com/acme/app/pull/12"
+      }
+    }
+  }
+}

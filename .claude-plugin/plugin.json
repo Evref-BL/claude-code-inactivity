@@ -1,0 +1,14 @@
+{
+  "name": "clode-inactivity",
+  "displayName": "Claude Code InActivity",
+  "version": "0.1.0",
+  "description": "Your inactivity is Claude's in activity. Spread the tasks of a GitHub Projects board over the unused Claude quota of team members: deterministic comment-based claiming, one disposable Pharo image per task, draft pull requests in the morning.",
+  "author": {
+    "name": "Evref-BL",
+    "url": "https://github.com/Evref-BL"
+  },
+  "homepage": "https://github.com/Evref-BL/claude-code-inactivity",
+  "repository": "https://github.com/Evref-BL/claude-code-inactivity",
+  "license": "Apache-2.0",
+  "keywords": ["pharo", "smalltalk", "scheduler", "github-projects", "agents"]
+}

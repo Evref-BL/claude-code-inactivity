@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "inactivity user config",
+  "type": "object",
+  "required": ["version", "projects"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "login": { "type": ["string", "null"], "description": "GitHub login; null = discovered with viewer{login} and cached in state." },
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["id", "owner", "number"], "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" },
+          "enabled": { "type": "boolean", "default": true },
+          "owner": { "type": "string" },
+          "ownerType": { "enum": ["organization", "user", null], "default": null },
+          "number": { "type": "integer", "minimum": 1 },
+          "policy": {
+            "type": "object", "required": ["repo"], "additionalProperties": false,
+            "properties": {
+              "repo": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+              "path": { "type": "string", "default": ".inactivity/team.json" }
+            }
+          },
+          "team": { "type": "object", "description": "Inline team policy (single-member use). Exactly one of policy/team is required." },
+          "repos": {
+            "type": "object",
+            "description": "Allowlist of repos this member executes for.",
+            "additionalProperties": {
+              "type": "object", "additionalProperties": false,
+              "properties": {
+                "cloneUrl": { "type": "string", "description": "default https://github.com/<repo>.git" },
+                "baseBranch": { "type": ["string", "null"], "default": null }
+              }
+            }
+          }
+        }
+      }
+    },
+    "availability": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "paused": { "type": "boolean", "default": false },
+        "pausedUntil": { "type": ["string", "null"], "description": "ISO instant" },
+        "days": { "type": "array", "items": { "enum": ["mon","tue","wed","thu","fri","sat","sun"] }, "default": ["mon","tue","wed","thu","fri"] },
+        "dailyPoints": { "type": "integer", "minimum": 0, "default": 4 },
+        "maxTasksPerDay": { "type": "integer", "minimum": 0, "default": 2 },
+        "maxTasksPerRun": { "type": "integer", "minimum": 1, "default": 1, "description": "Tasks started by one tick." },
+        "models": { "type": "array", "items": { "enum": ["haiku", "sonnet", "opus"] }, "default": ["haiku", "sonnet"] },
+        "hardDifficultyAllowed": { "type": "boolean", "default": false },
+        "creditHeadroom": { "enum": ["low", "normal", "high"], "default": "normal", "description": "Scales dailyPoints: 0.5 / 1 / 1.5 (floor)." }
+      }
+    },
+    "modelOverrides": { "type": "object", "description": "tier alias -> exact --model value", "additionalProperties": { "type": "string" } },
+    "effort": { "type": "object", "description": "tier alias -> --effort value; overrides team.effort", "additionalProperties": { "enum": ["low","medium","high","xhigh","max"] } },
+    "execution": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "timeoutMinutes": { "type": "object", "default": { "easy": 20, "medium": 45, "hard": 90 } },
+        "maxTurns": { "type": "object", "default": { "easy": 40, "medium": 80, "hard": 150 } },
+        "maxBudgetUsd": { "type": ["object", "null"], "default": { "easy": 1, "medium": 3, "hard": 10 }, "description": "Client-side estimate (API-equivalent); null omits the flag." },
+        "mutationDelayMs": { "type": "integer", "default": 1500 }
+      }
+    },
+    "permissions": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "extraAllowedTools": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "extraDisallowedTools": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "denyPharoTools": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Pharo MCP tool names (without prefix) to deny on top of the built-in deny list" },
+        "allowPharoTools": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Extra Pharo MCP tool names (without prefix) the agent may call, beyond the built-in inspection/edit/test/export list" },
+        "allowImageEvaluate": { "type": "boolean", "default": false, "description": "Opt in to image_evaluate (arbitrary Smalltalk, hence arbitrary host code). Off by default." }
+      }
+    },
+    "pharo": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "plexusCommand": { "type": "array", "items": { "type": "string" } },
+        "defaultTemplate": { "type": "string" },
+        "imageStartTimeoutSeconds": { "type": "integer", "default": 600 },
+        "display": { "enum": ["headless"], "default": "headless" },
+        "passEnv": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Extra environment variable names PLexus and the Pharo image may inherit (the environment is an allowlist)" }
+      }
+    },
+    "claude": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "default": "claude", "description": "Resolved to an absolute path by schedule install." },
+        "configDir": { "type": ["string", "null"], "default": null, "description": "Exported as CLAUDE_CONFIG_DIR: multi-account on one machine." },
+        "allowApiKey": { "type": "boolean", "default": false },
+        "loadUserSettings": { "type": "boolean", "default": false, "description": "Load the member's user-level Claude settings (--setting-sources user). Off by default: a broad user allow rule or hook would widen the agent's authority." },
+        "passEnv": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Extra environment variable names the agent may inherit (the environment is an allowlist; GitHub tokens are never passed)" }
+      }
+    },
+    "git": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "branchPrefix": { "type": "string", "default": "inactivity" },
+        "remote": { "type": "string", "default": "origin" },
+        "keepWorktreeOnFailure": { "type": "boolean", "default": false }
+      }
+    },
+    "github": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "apiUrl": { "type": "string", "default": "https://api.github.com" } }
+    },
+    "schedule": { "type": "object", "properties": { "intervalMinutes": { "type": "integer", "minimum": 5, "maximum": 60, "default": 10 } } },
+    "dryRun": { "type": "boolean", "default": false, "description": "Global default for --dry-run." }
+  }
+}

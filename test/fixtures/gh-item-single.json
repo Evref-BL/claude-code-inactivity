@@ -1,0 +1,107 @@
+{
+  "_comment": "// UNVERIFIED against live API: hand-written from the documented GraphQL shapes",
+  "data": {
+    "node": {
+      "id": "PVTI_7",
+      "type": "ISSUE",
+      "isArchived": false,
+      "fieldValues": {
+        "nodes": [
+          {
+            "__typename": "ProjectV2ItemFieldSingleSelectValue",
+            "name": "Todo",
+            "optionId": "o_Todo",
+            "field": {
+              "name": "Status"
+            }
+          },
+          {
+            "__typename": "ProjectV2ItemFieldSingleSelectValue",
+            "name": "P1",
+            "optionId": "o_p",
+            "field": {
+              "name": "Priority"
+            }
+          },
+          {
+            "__typename": "ProjectV2ItemFieldSingleSelectValue",
+            "name": "easy",
+            "optionId": "o_d",
+            "field": {
+              "name": "difficulty"
+            }
+          },
+          {
+            "__typename": "ProjectV2ItemFieldTextValue",
+            "text": "@bob",
+            "field": {
+              "name": "Agent"
+            }
+          },
+          {
+            "__typename": "ProjectV2ItemFieldDateValue"
+          },
+          {}
+        ]
+      },
+      "content": {
+        "__typename": "Issue",
+        "id": "I_7",
+        "number": 7,
+        "title": "Task 7",
+        "body": "Body 7",
+        "url": "https://github.com/acme/app/issues/7",
+        "state": "OPEN",
+        "updatedAt": "2026-11-18T10:00:00Z",
+        "authorAssociation": "MEMBER",
+        "author": {
+          "login": "alice",
+          "__typename": "User"
+        },
+        "repository": {
+          "nameWithOwner": "acme/app"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": "bug"
+            },
+            {
+              "name": "priority:P1"
+            }
+          ]
+        },
+        "comments": {
+          "totalCount": 130,
+          "pageInfo": {
+            "hasPreviousPage": true,
+            "startCursor": "older1"
+          },
+          "nodes": [
+            {
+              "id": "IC_30",
+              "databaseId": 9030,
+              "author": {
+                "login": "bob",
+                "__typename": "User"
+              },
+              "createdAt": "2026-11-19T04:30:00Z",
+              "lastEditedAt": null,
+              "isMinimized": false,
+              "body": "newest-a"
+            },
+            {
+              "id": "IC_31",
+              "databaseId": 9031,
+              "author": null,
+              "createdAt": "2026-11-19T04:31:00Z",
+              "lastEditedAt": null,
+              "isMinimized": false,
+              "body": "ghost"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

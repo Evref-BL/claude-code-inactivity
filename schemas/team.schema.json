@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "inactivity team policy",
+  "type": "object",
+  "required": ["v", "timezone", "roster"],
+  "additionalProperties": false,
+  "properties": {
+    "v": { "const": 1 },
+    "timezone": { "type": "string", "description": "IANA zone, e.g. Europe/Paris" },
+    "cycleDays": { "type": "array", "items": { "enum": ["mon","tue","wed","thu","fri","sat","sun"] }, "default": ["mon","tue","wed","thu","fri"] },
+    "window": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "start": { "type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$", "default": "06:00" }, "end": { "type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$", "default": "10:00" } }
+    },
+    "graceSeconds": { "type": "integer", "minimum": 0, "maximum": 600, "default": 60 },
+    "startDeadline": { "type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$", "default": "11:30" },
+    "round2": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean", "default": true }, "durationMinutes": { "type": "integer", "minimum": 5, "maximum": 240, "default": 30 } }
+    },
+    "executionEnd": { "type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$", "default": "20:00" },
+    "fields": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "priority": { "default": "Priority" }, "difficulty": { "default": "Difficulty" }, "status": { "default": "Status" }, "agent": { "default": "Agent" } }
+    },
+    "statusValues": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "ready": { "default": "Todo" }, "claimed": { "default": "Claimed" }, "inProgress": { "default": "In progress" }, "inReview": { "default": "In review" }, "blocked": { "default": "Blocked" }, "done": { "default": "Done" } }
+    },
+    "priorityWeights": { "type": "object", "additionalProperties": { "type": "integer" }, "default": { "P0": 1000, "P1": 100, "P2": 10, "P3": 1 } },
+    "defaultPriority": { "type": "string", "default": "P2" },
+    "defaultDifficulty": { "enum": ["easy", "medium", "hard"], "default": "medium" },
+    "difficultyModel": { "type": "object", "default": { "easy": "haiku", "medium": "sonnet", "hard": "opus" } },
+    "difficultyCost": { "type": "object", "default": { "easy": 1, "medium": 2, "hard": 4 }, "description": "Points consumed from a member's capacity." },
+    "effort": { "type": "object", "default": { "haiku": "low", "sonnet": "medium", "opus": "high" } },
+    "trustedAssociations": { "type": "array", "items": { "enum": ["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR","FIRST_TIME_CONTRIBUTOR","FIRST_TIMER","MANNEQUIN","NONE"] }, "default": ["OWNER", "MEMBER", "COLLABORATOR"] },
+    "includePullRequests": { "type": "boolean", "default": false },
+    "labelFallbacks": { "type": "boolean", "default": true },
+    "maxClaimsPerMember": { "type": "integer", "minimum": 1, "maximum": 50, "default": 8 },
+    "fairness": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "historyDays": { "type": "integer", "minimum": 0, "maximum": 60, "default": 7 }, "historyWeightPct": { "type": "integer", "minimum": 0, "maximum": 100, "default": 25 } }
+    },
+    "roster": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "required": ["login"], "additionalProperties": false,
+        "properties": {
+          "login": { "type": "string" },
+          "maxCapacity": { "type": "integer", "minimum": 0, "default": 8, "description": "Ceiling of points per cycle the member may offer." },
+          "models": { "type": "array", "items": { "enum": ["haiku", "sonnet", "opus"] }, "default": ["haiku", "sonnet", "opus"], "description": "Ceiling of models the member may offer." }
+        }
+      }
+    }
+  }
+}

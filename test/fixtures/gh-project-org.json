@@ -1,0 +1,60 @@
+{
+  "_comment": "// UNVERIFIED against live API: hand-written from the documented GraphQL shapes",
+  "data": {
+    "organization": {
+      "projectV2": {
+        "id": "PVT_1",
+        "title": "Backlog",
+        "fields": {
+          "nodes": [
+            {
+              "id": "F_title",
+              "name": "Title",
+              "dataType": "TITLE"
+            },
+            {
+              "id": "F_status",
+              "name": "Status",
+              "dataType": "SINGLE_SELECT",
+              "options": [
+                {
+                  "id": "OPT_todo",
+                  "name": "Todo"
+                },
+                {
+                  "id": "OPT_claimed",
+                  "name": "Claimed"
+                },
+                {
+                  "id": "OPT_review",
+                  "name": "In review"
+                }
+              ]
+            },
+            {
+              "id": "F_prio",
+              "name": "Priority",
+              "dataType": "SINGLE_SELECT",
+              "options": [
+                {
+                  "id": "OPT_p0",
+                  "name": "P0"
+                },
+                {
+                  "id": "OPT_p1",
+                  "name": "P1"
+                }
+              ]
+            },
+            {
+              "id": "F_agent",
+              "name": "Agent",
+              "dataType": "TEXT"
+            },
+            {}
+          ]
+        }
+      }
+    }
+  }
+}

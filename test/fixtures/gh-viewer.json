@@ -1,0 +1,9 @@
+{
+  "_comment": "// UNVERIFIED against live API: hand-written from the documented GraphQL shapes",
+  "data": {
+    "viewer": {
+      "login": "alice",
+      "databaseId": 1234
+    }
+  }
+}

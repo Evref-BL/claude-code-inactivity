@@ -1,0 +1,12 @@
+[Unit]
+Description=inactivity tick timer
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=true
+RandomizedDelaySec=60
+AccuracySec=1min
+Unit=inactivity.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,40 @@
+{
+  "_comment": "// UNVERIFIED against live API: hand-written from the documented GraphQL shapes",
+  "data": {
+    "node": {
+      "comments": {
+        "totalCount": 130,
+        "pageInfo": {
+          "hasPreviousPage": false,
+          "startCursor": "z"
+        },
+        "nodes": [
+          {
+            "id": "IC_10",
+            "databaseId": 9010,
+            "author": {
+              "login": "carol",
+              "__typename": "User"
+            },
+            "createdAt": "2026-11-19T04:10:00Z",
+            "lastEditedAt": null,
+            "isMinimized": false,
+            "body": "oldest"
+          },
+          {
+            "id": "IC_11",
+            "databaseId": 9011,
+            "author": {
+              "login": "bot[bot]",
+              "__typename": "Bot"
+            },
+            "createdAt": "2026-11-19T04:11:00Z",
+            "lastEditedAt": null,
+            "isMinimized": false,
+            "body": "robot"
+          }
+        ]
+      }
+    }
+  }
+}

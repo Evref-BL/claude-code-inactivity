@@ -1,0 +1,12 @@
+{
+  "_comment": "// UNVERIFIED against live API: hand-written from the documented GraphQL shapes",
+  "data": {
+    "repository": {
+      "object": {
+        "text": "{\"v\":1}\n",
+        "isTruncated": false,
+        "isBinary": false
+      }
+    }
+  }
+}

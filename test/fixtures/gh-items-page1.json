@@ -1,0 +1,178 @@
+{
+  "_comment": "// UNVERIFIED against live API: hand-written from the documented GraphQL shapes",
+  "data": {
+    "node": {
+      "items": {
+        "pageInfo": {
+          "hasNextPage": true,
+          "endCursor": "cur1"
+        },
+        "nodes": [
+          {
+            "id": "PVTI_1",
+            "type": "ISSUE",
+            "isArchived": false,
+            "fieldValues": {
+              "nodes": [
+                {
+                  "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                  "name": "Todo",
+                  "optionId": "o_Todo",
+                  "field": {
+                    "name": "Status"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                  "name": "P1",
+                  "optionId": "o_p",
+                  "field": {
+                    "name": "Priority"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                  "name": "easy",
+                  "optionId": "o_d",
+                  "field": {
+                    "name": "difficulty"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldTextValue",
+                  "text": "@bob",
+                  "field": {
+                    "name": "Agent"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldDateValue"
+                },
+                {}
+              ]
+            },
+            "content": {
+              "__typename": "Issue",
+              "id": "I_1",
+              "number": 1,
+              "title": "Task 1",
+              "body": "Body 1",
+              "url": "https://github.com/acme/app/issues/1",
+              "state": "OPEN",
+              "updatedAt": "2026-11-18T10:00:00Z",
+              "authorAssociation": "MEMBER",
+              "author": {
+                "login": "alice",
+                "__typename": "User"
+              },
+              "repository": {
+                "nameWithOwner": "acme/app"
+              },
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  },
+                  {
+                    "name": "priority:P1"
+                  }
+                ]
+              },
+              "comments": {
+                "totalCount": 1,
+                "pageInfo": {
+                  "hasPreviousPage": false,
+                  "startCursor": "c0"
+                },
+                "nodes": [
+                  {
+                    "id": "IC_1",
+                    "databaseId": 9001,
+                    "author": {
+                      "login": "bob",
+                      "__typename": "User"
+                    },
+                    "createdAt": "2026-11-19T04:01:00Z",
+                    "lastEditedAt": null,
+                    "isMinimized": false,
+                    "body": "hello"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "id": "PVTI_2",
+            "type": "ISSUE",
+            "isArchived": false,
+            "fieldValues": {
+              "nodes": [
+                {
+                  "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                  "name": "Claimed",
+                  "optionId": "o_Claimed",
+                  "field": {
+                    "name": "Status"
+                  }
+                },
+                {
+                  "__typename": "ProjectV2ItemFieldDateValue"
+                },
+                {}
+              ]
+            },
+            "content": {
+              "__typename": "Issue",
+              "id": "I_2",
+              "number": 2,
+              "title": "Task 2",
+              "body": "Body 2",
+              "url": "https://github.com/acme/app/issues/2",
+              "state": "OPEN",
+              "updatedAt": "2026-11-18T10:00:00Z",
+              "authorAssociation": "MEMBER",
+              "author": {
+                "login": "alice",
+                "__typename": "User"
+              },
+              "repository": {
+                "nameWithOwner": "acme/app"
+              },
+              "labels": {
+                "nodes": [
+                  {
+                    "name": "bug"
+                  },
+                  {
+                    "name": "priority:P1"
+                  }
+                ]
+              },
+              "comments": {
+                "totalCount": 1,
+                "pageInfo": {
+                  "hasPreviousPage": false,
+                  "startCursor": "c0"
+                },
+                "nodes": [
+                  {
+                    "id": "IC_1",
+                    "databaseId": 9001,
+                    "author": {
+                      "login": "bob",
+                      "__typename": "User"
+                    },
+                    "createdAt": "2026-11-19T04:01:00Z",
+                    "lastEditedAt": null,
+                    "isMinimized": false,
+                    "body": "hello"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "clode-inactivity",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Task scheduler spreading GitHub Projects tasks over team members' Claude accounts (Pharo projects, beta).",
+  "license": "Apache-2.0",
+  "bin": {
+    "inactivity": "bin/inactivity.js"
+  },
+  "files": ["bin", "src", "skills", "templates", "schemas", ".claude-plugin", "README.md", "LICENSE"],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "node --check bin/inactivity.js && node scripts/check-syntax.js"
+  }
+}

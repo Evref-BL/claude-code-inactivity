@@ -1,0 +1,23 @@
+{
+  "_comment": "// UNVERIFIED against live API: hand-written from the documented GraphQL shapes",
+  "data": {
+    "repository": {
+      "labels": {
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": null
+        },
+        "nodes": [
+          {
+            "id": "L_1",
+            "name": "inactivity"
+          },
+          {
+            "id": "L_2",
+            "name": "Other"
+          }
+        ]
+      }
+    }
+  }
+}

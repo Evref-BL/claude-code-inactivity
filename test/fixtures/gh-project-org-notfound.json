@@ -1,0 +1,15 @@
+{
+  "_comment": "// UNVERIFIED against live API: hand-written from the documented GraphQL shapes",
+  "data": {
+    "organization": null
+  },
+  "errors": [
+    {
+      "type": "NOT_FOUND",
+      "path": [
+        "organization"
+      ],
+      "message": "Could not resolve to an Organization with the login of 'alice'."
+    }
+  ]
+}

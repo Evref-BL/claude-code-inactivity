@@ -1,0 +1,14 @@
+{
+  "name": "clode-inactivity",
+  "owner": {
+    "name": "Evref-BL"
+  },
+  "description": "Claude Code InActivity: a task scheduler that spreads GitHub Projects tasks over team members' Claude accounts.",
+  "plugins": [
+    {
+      "name": "clode-inactivity",
+      "source": "./",
+      "description": "Claim, resolve and run Pharo tasks from a GitHub Projects board, unattended, in the morning."
+    }
+  ]
+}
