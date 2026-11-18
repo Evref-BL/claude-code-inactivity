@@ -35,7 +35,10 @@ only when it is open, `Todo` (or a stale `Claimed`) and not started today.
 Whether a member *claims* it is a personal decision: each member claims and runs
 only tasks whose author **and last editor** are on their own `trustedAuthors`
 list (`inactivity trust add <login>`, empty by default, so nothing runs until it
-is filled). A task nobody trusts receives no claim and stays `Todo`. Who may
+is filled) **and that the member approved** after reading it (`inactivity review` /
+`inactivity approve`, bound to the exact title and body: a later edit voids the
+approval). A task nobody trusts or approved receives no claim from that member and
+stays `Todo`. Who may
 write to the board at all is a GitHub setting: see
 [board-lockdown.md](board-lockdown.md). Two task-level failures in seven days make a task ineligible
 until a human resets it.

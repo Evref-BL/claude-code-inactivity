@@ -13,6 +13,11 @@
       "default": [],
       "description": "THIS member's own whitelist of GitHub logins whose tasks are claimed and run (case-insensitive; a GitHub App is written 'name[bot]'). Empty by default: nothing is claimed or executed until logins are added. Applied when building claims, when an assignment arrives, and at the runner start gate (author and last editor of the issue). Never shared, never in team.json."
     },
+    "approval": {
+      "enum": ["local", "none"],
+      "default": "local",
+      "description": "Manual per-ticket approval by THIS member. 'local' (default, secure): a task is claimed and run only after you approved its exact content (author, title, body) with `inactivity approve`; an edit afterwards removes the approval. 'none': explicit opt-in, no approval step (the trustedAuthors whitelist still applies). Setting 'none' through the CLI needs --yes. Approvals live in approvals.json in the state dir, never shared."
+    },
     "allowPublicBoard": { "type": "boolean", "default": false, "description": "Tolerate a PUBLIC project board (doctor and `projects check` fail on one otherwise). A project entry may override it." },
     "projects": {
       "type": "array",

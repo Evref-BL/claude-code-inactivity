@@ -119,6 +119,22 @@ export async function runDoctor(deps, options = {}) {
     return ok("trusted-authors", `${list.length} trusted author(s): ${list.join(", ")}`, bots.length ? { bots, note: "GitHub Apps are on the list: every issue they open will be executed." } : undefined);
   });
 
+  await add("approval-mode", async () => {
+    if (!config) return skip("approval-mode", "No config.");
+    const approval = await ctx.mod("approval");
+    if (approval.approvalMode(config) === "none") {
+      return warn("approval-mode", 'Approval mode is "none": every task from a trusted author is claimed and run on your Claude account without you reading it. A malicious ticket from a trusted (or compromised) account would run unseen.', {
+        fix: 'Run `inactivity config set approval "local"` and approve the tasks you read with `inactivity review` / `inactivity approve`.',
+      });
+    }
+    const stateDir = options.paths?.stateDir;
+    const store = stateDir ? await approval.loadApprovals(deps, stateDir) : null;
+    if (store?.corrupt) {
+      return warn("approval-mode", "approvals.json is unreadable: nothing is approved (safe), every task needs a new approval.", { fix: "Approve the tasks you accept again with `inactivity approve`." });
+    }
+    return ok("approval-mode", `local: a task runs only after you approved its exact content${store ? ` (${Object.keys(store.approvals).length} approval(s) stored)` : ""}`);
+  });
+
   await add("timezone", async () => {
     const time = await ctx.mod("time");
     const zones = projects.filter((p) => p.team?.timezone).map((p) => p.team.timezone);

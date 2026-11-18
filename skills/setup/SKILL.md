@@ -91,6 +91,24 @@ the user explicitly asks (`dependabot[bot]` form). The author **and the last
 editor** of every task must be on the list at run time. The list is personal and
 local: it is not written to `team.json` and not shared.
 
+### 5b. Approve every ticket yourself (security-critical)
+
+Even a trusted author's ticket can be rewritten, or the account compromised, so
+by default (`approval: "local"`) a task is claimed and run only after **this user
+read it and approved its exact content** (author, title, body: an edit afterwards
+voids the approval). Explain this and ask which mode they want:
+
+- `local` (default, recommended): nothing to set. Each evening, before the claim
+  window, they run `/clode-inactivity:review` (or `inactivity review` and
+  `inactivity approve <repo#n> --hash <hash>`). Tasks left unapproved are simply
+  not claimed.
+- `none`: tasks of trusted authors run unread. Only if the user insists after
+  hearing the risk (a malicious or edited ticket then runs on their Claude account
+  with no human in the loop): `config set approval none --yes`. `doctor` will
+  warn about it forever. Never choose `none` for them.
+
+Never approve tasks yourself during setup.
+
 ## 6. Lock the board down (humans, in GitHub)
 
 The board must only be readable and writable by the members of the group.
@@ -125,7 +143,8 @@ fields, option names or roster membership. A `board-exposure` failure means the
 project board is PUBLIC: have the user make it private (docs/board-lockdown.md,
 step 1); only if they really want it public, `config set allowPublicBoard true`.
 A warning about public repositories is explained in the same document. The
-`trusted-authors` warning goes away once step 5 is done. Items that are draft issues are
+`trusted-authors` warning goes away once step 5 is done; `approval-mode` warns
+only if approval was switched to `none` (step 5b). Items that are draft issues are
 reported as skipped: they cannot be claimed.
 
 ## 9. Pharo warmup
@@ -152,5 +171,7 @@ must configure themselves.
 Run `tick --dry-run --now <tomorrow>T<window start + 10 minutes>:00Z` (use the
 team time zone offset) and summarise what would be claimed. Nothing is posted.
 If the answer says `empty-trust-list` or lists tasks under `untrusted`, explain
-that the trusted-authors list (step 5) is why nothing would be claimed.
-Finish by pointing to `/clode-inactivity:status`.
+that the trusted-authors list (step 5) is why nothing would be claimed. If it
+lists `pending-approval`, nothing is claimed until the user approves tasks
+(step 5b): show `review` and let them decide.
+Finish by pointing to `/clode-inactivity:review` (evenings) and `/clode-inactivity:status`.

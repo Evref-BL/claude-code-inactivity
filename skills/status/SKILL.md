@@ -20,6 +20,11 @@ Read only: this skill never posts a comment and never starts a run.
      plainly that nothing is claimed or executed until the user adds logins with
      `trust add <login>` (suggest it, never run it unasked, never add an author
      just because you saw their name on the board);
+   - approval (`approval.mode`, `approval.pending`): the tasks awaiting my approval
+     (`pendingApproval`: task, author, `pending` or `changed-since-approval`) and the
+     approved ones (`approved`). If tasks are pending, say they will not be claimed
+     and suggest `/clode-inactivity:review` (evening, before the claim window); never
+     approve anything from here. If `approval.mode` is `none`, say tasks run unread;
    - resolution: task, assignee, model, round; and the unassigned tasks with reasons;
    - my tasks with their local state (assigned, started, outcome, PR).
 3. Then the global lines: usage-limit state (`limit.until`), leaked runs, scheduler

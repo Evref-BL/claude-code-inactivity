@@ -302,11 +302,15 @@ async function cmdConfig(ctx) {
     }
     case "set": {
       if (!key || value === undefined) throw fail("usage", "Usage: inactivity config set <dotted.key> <json-value>");
+      // Switching the per-ticket approval off removes the member's last line of defence against a malicious ticket: explicit opt-in.
+      if (key === "approval" && parseValue(value) === "none" && !ctx.global.yes) {
+        throw fail("needs-confirmation", 'approval "none" disables your manual per-ticket approval: any task from a trusted author will be claimed and run on your Claude account without you reading it. Re-run with --yes to confirm.');
+      }
       const next = configMod.setByPath(await ctx.readRaw(), key, parseValue(value));
       const result = configMod.validateConfig(next);
       if (!result.ok) throw fail("invalid-config", `Not saved, the result would be invalid: ${result.errors.map((e) => `${e.path} ${e.message}`).join("; ")}`, { errors: result.errors });
       if (!ctx.dryRun) await configMod.saveConfig(ctx.deps, next, { path: paths.configPath });
-      return { ok: true, command: "config", key, value: parseValue(value), saved: !ctx.dryRun, ...(ctx.dryRun ? { dryRun: true } : {}) };
+      return { ok: true, command: "config", key, value: parseValue(value), saved: !ctx.dryRun, ...(ctx.dryRun ? { dryRun: true } : {}), ...(key === "approval" && parseValue(value) === "none" ? { warning: 'Approval is OFF: tasks from your trusted authors are claimed and run without you reading them. Turn it back on with `inactivity config set approval "local"`.' } : {}) };
     }
     default:
       throw fail("usage", "Usage: inactivity config path|show|validate|set <dotted.key> <json-value>");
@@ -561,8 +565,13 @@ async function cmdClaim(ctx) {
     const { trusted: trustedItems, untrusted } = trust.partitionByTrust(cands.items, config.trustedAuthors);
     const untrustedSkips = untrusted.map((u) => ({ task: u.task, reason: u.reason === "empty-trust-list" ? "empty-trust-list" : "untrusted-author", author: u.author, ...(u.editor ? { editor: u.editor } : {}) }));
     if (untrusted.length && trust.trustSet(config.trustedAuthors).size === 0) return { cycle: board.cycle, round, offer, posted: [], skipped: [{ task: null, reason: "empty-trust-list", hint: trust.TRUST_HINT }, ...untrustedSkips] };
+    // Approval gate 1 of 3: only tasks I approved at their current content are claimed.
+    const approvalMod = await ctx.mod("approval");
+    const approval = await loadApprovalContext(ctx, config);
+    const approvalSplit = approvalMod.partitionByApproval(trustedItems, approval);
+    const pendingSkips = approvalSplit.pending.map((p) => ({ task: p.task, reason: p.reason, hash: approvalMod.shortHash(p.hash) }));
     const existing = evs.filter((e) => e.member?.toLowerCase() === board.login.toLowerCase() && e.round === round);
-    const payloads = claims.buildClaims({ team: board.team, cycle: board.cycle, round, login: board.login, offer, candidates: trustedItems, repoAllowlist: Object.keys(project.repos ?? {}), existing, hardDifficultyAllowed: config.availability?.hardDifficultyAllowed === true, trustedAuthors: config.trustedAuthors });
+    const payloads = claims.buildClaims({ team: board.team, cycle: board.cycle, round, login: board.login, offer, candidates: approvalSplit.approved, repoAllowlist: Object.keys(project.repos ?? {}), existing, hardDifficultyAllowed: config.availability?.hardDifficultyAllowed === true, trustedAuthors: config.trustedAuthors, approval });
     const posted = [];
     const byTask = new Map(board.items.map((i) => [i.id, i]));
     for (const payload of payloads) {
@@ -577,8 +586,9 @@ async function cmdClaim(ctx) {
     }
     const postedIds = new Set(posted.map((p) => p.task));
     const untrustedIds = new Set(untrusted.map((u) => u.task));
-    const skippedTasks = [...cands.items.filter((i) => !postedIds.has(i.id) && !untrustedIds.has(i.id)).map((i) => ({ task: i.id, reason: "not-selected" })), ...untrustedSkips];
-    return { cycle: board.cycle, round, offer, posted, skipped: skippedTasks };
+    const pendingIds = new Set(pendingSkips.map((p) => p.task));
+    const skippedTasks = [...cands.items.filter((i) => !postedIds.has(i.id) && !untrustedIds.has(i.id) && !pendingIds.has(i.id)).map((i) => ({ task: i.id, reason: "not-selected" })), ...untrustedSkips, ...pendingSkips];
+    return { cycle: board.cycle, round, offer, posted, skipped: skippedTasks, ...(pendingSkips.length ? { pendingApproval: pendingSkips.length, hint: approvalMod.APPROVAL_HINT } : {}) };
   });
   return { ok: true, command: "claim", ...(ctx.dryRun ? { dryRun: true } : {}), projects };
 }
@@ -608,6 +618,13 @@ async function cmdResolve(ctx) {
         const verdict = trust.checkItemTrust(candidate ?? {}, ctx.config.trustedAuthors);
         if (!verdict.trusted) {
           assignSkipped.push({ task: assignment.task, reason: verdict.reason, detail: verdict.detail });
+          continue;
+        }
+        // Approval gate 2 of 3: the task must still be approved at its current content.
+        const approvalMod = await ctx.mod("approval");
+        const approvalVerdict = approvalMod.checkItemApproval(candidate ?? {}, await loadApprovalContext(ctx, ctx.config));
+        if (!approvalVerdict.approved) {
+          assignSkipped.push({ task: assignment.task, reason: "not-approved", why: approvalVerdict.reason, detail: approvalVerdict.detail });
           continue;
         }
         const round = resolution.final[assignment.task]?.round ?? 1;
@@ -677,6 +694,7 @@ async function cmdRun(ctx) {
     const result = { command: "run", ...(ctx.dryRun ? { dryRun: true } : {}), runId: record.runId, outcome: record.outcome, reason: record.reason ?? null, pr: record.pr ?? null, branch: record.branch ?? null, costUsd: record.costUsd ?? null, numTurns: record.numTurns ?? null, runDir: record.runDir ?? null };
     if (!ctx.dryRun && record.runId) await recordManualRun(ctx, project, board, assignment, round, record);
     if (record.reason === "untrusted-author") return { ok: false, code: "untrusted-author", error: `${task.id} was not run: ${record.detail ?? "its author is not in your trusted authors"}. Nothing was executed.`, ...result, _exit: 1 };
+    if (record.reason === "not-approved") return { ok: false, code: "not-approved", error: `${task.id} was not run: ${record.detail ?? "you have not approved its current content"}. Nothing was executed (--force does not bypass the approval).`, ...result, _exit: 1 };
     const taskLevel = ["failed", "blocked"].includes(record.outcome);
     if (taskLevel && INFRA_REASONS.has(record.reason)) return { ok: false, code: record.reason, error: `Run ${record.runId} stopped on an infrastructure problem (${record.reason}).`, ...result, _exit: 1 };
     return { ok: !taskLevel, ...result, _exit: taskLevel ? 4 : 0 };
@@ -717,6 +735,7 @@ async function cmdStatus(ctx) {
     scheduler = { error: /** @type {any} */ (error).message };
   }
   const github = ctx.global.offline ? null : await makeGithub(ctx).catch((error) => ({ error }));
+  const approval = await loadApprovalContext(ctx, config);
   const projects = await perProject(ctx, async (project) => {
     if (!github || github.error) return { board: null, note: github?.error ? `GitHub unavailable: ${github.error.message}` : "offline" };
     const board = await loadBoard(ctx, project, { github, state, cycle: ctx.flags.cycle });
@@ -725,6 +744,8 @@ async function cmdStatus(ctx) {
     const cands = claims.candidates({ items: board.items, team: board.team, cycle: board.cycle, round: 1, events: evs });
     const trust = await ctx.mod("trust");
     const split = trust.partitionByTrust(cands.items, config.trustedAuthors);
+    const approvalMod = await ctx.mod("approval");
+    const approvalSplit = approvalMod.partitionByApproval(split.trusted, approval);
     const key = ledger.cycleKey(project.id, board.cycle);
     const local = state.cycles?.[key]?.assigned ?? {};
     const mine = claims.ownAssignments(resolution, board.login).map((a) => ({ ...a, local: local[a.task] ?? null }));
@@ -734,6 +755,8 @@ async function cmdStatus(ctx) {
       phases: { 1: board.phases.rounds[1], 2: board.phases.rounds[2], executionOpen: board.phases.executionOpen, executionEnd: board.phases.executionEnd },
       offer: policy.buildOffer({ config, team: board.team, login: board.login, now: board.now, state, round: 1 }),
       candidates: split.trusted.map((i) => ({ task: i.id, title: i.title, priority: policy.priorityOf(i, board.team), difficulty: policy.difficultyOf(i, board.team) })),
+      pendingApproval: approvalSplit.pending.map((p) => ({ task: p.task, title: p.item.title, author: p.item.authorLogin ?? null, state: p.reason === "changed-since-approval" ? "changed-since-approval" : "pending", hash: approvalMod.shortHash(p.hash) })),
+      approved: approvalSplit.approved.map((i) => ({ task: i.id, title: i.title, hash: approvalMod.shortHash(approvalMod.contentHash(i)) })),
       skippedUntrusted: split.untrusted.map((u) => ({ task: u.task, title: u.item.title, reason: u.reason, who: u.who, author: u.author, ...(u.editor ? { editor: u.editor } : {}) })),
       resolution: { final: resolution.final, unassigned: resolution.rounds[1]?.unassigned ?? [] },
       mine,
@@ -742,7 +765,14 @@ async function cmdStatus(ctx) {
   });
   const trusted = [...(await ctx.mod("trust")).trustSet(config.trustedAuthors)];
   const trust = { trustedAuthors: trusted, ...(trusted.length === 0 ? { warning: "No trusted author: nothing is claimed or executed. Run `inactivity trust add <login>`." } : {}) };
-  return { ok: true, command: "status", now: ctx.deps.now().toISOString(), trust, limit: state.limit ?? { until: null, reason: null }, leaks: state.leaks?.length ?? 0, scheduler, runs, projects };
+  const pendingTotal = projects.reduce((n, p) => n + (p.pendingApproval?.length ?? 0), 0);
+  const approvalInfo = {
+    mode: approval.mode,
+    approvedEntries: Object.keys(approval.store.approvals).length,
+    pending: pendingTotal,
+    ...(approval.mode === "none" ? { warning: "Approval mode is none: tasks from your trusted authors run without you reading them." } : pendingTotal > 0 ? { warning: `${pendingTotal} task(s) await your approval and will not be claimed. Run \`inactivity review\`.` } : {}),
+  };
+  return { ok: true, command: "status", now: ctx.deps.now().toISOString(), trust, approval: approvalInfo, limit: state.limit ?? { until: null, reason: null }, leaks: state.leaks?.length ?? 0, scheduler, runs, projects };
 }
 
 /** @param {string} text @param {Date} now */
@@ -891,6 +921,238 @@ async function cmdCleanup(ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// Manual per-ticket approval (docs/design.md 1.5): review, approve, approvals
+
+/** Mode and local store of this member. @param {any} ctx @param {any} config */
+async function loadApprovalContext(ctx, config) {
+  const approval = await ctx.mod("approval");
+  const stateDir = (await ctx.resolvePaths()).stateDir;
+  return { mode: approval.approvalMode(config), store: await approval.loadApprovals(ctx.deps, stateDir), stateDir };
+}
+
+/** Candidate tasks of one board that pass MY whitelist (before approval). @param {any} ctx @param {any} board @param {any} config */
+async function trustedCandidates(ctx, board, config) {
+  const [claims, trust] = await Promise.all([ctx.mod("claims"), ctx.mod("trust")]);
+  const round = pickRound(board, {}) ?? 1;
+  const { events: evs } = await events(ctx, board);
+  const previous = round === 2 ? (await resolveBoard(ctx, board)).rounds?.[1] : undefined;
+  const cands = claims.candidates({ items: board.items, team: board.team, cycle: board.cycle, round, events: evs, previous });
+  return { round, trusted: trust.partitionByTrust(cands.items, config.trustedAuthors).trusted };
+}
+
+const MAX_REVIEW_BODY = 3000;
+
+async function pendingOfProject(ctx, config, project, { github, state, approval, full }) {
+  const [policy, approvalMod] = await Promise.all([ctx.mod("policy"), ctx.mod("approval")]);
+  const board = await loadBoard(ctx, project, { github, state, cycle: ctx.flags.cycle });
+  const { round, trusted } = await trustedCandidates(ctx, board, config);
+  const { pending } = approvalMod.partitionByApproval(trusted, approval);
+  const tasks = pending.map((p) => approvalMod.describePending({
+    item: p.item, reason: p.reason, hash: p.hash, difficulty: policy.difficultyOf(p.item, board.team), priority: policy.priorityOf(p.item, board.team), maxBody: full ? Number.POSITIVE_INFINITY : MAX_REVIEW_BODY,
+  }));
+  return { board, round, tasks };
+}
+
+async function cmdReview(ctx) {
+  const config = await ctx.loadConfig();
+  requireOnline(ctx);
+  const approvalMod = await ctx.mod("approval");
+  const state = await loadState(ctx);
+  const github = await makeGithub(ctx);
+  const approval = await loadApprovalContext(ctx, config);
+  if (approval.mode === "none") {
+    return { ok: true, command: "review", mode: "none", pending: 0, projects: [], note: 'Approval mode is "none": nothing needs your approval, every task from a trusted author runs unread. Turn it on with `inactivity config set approval "local"`.' };
+  }
+  const projects = await perProject(ctx, async (project) => {
+    const { board, round, tasks } = await pendingOfProject(ctx, config, project, { github, state, approval, full: Boolean(ctx.flags.full) });
+    return { cycle: board.cycle, round, tasks };
+  });
+  const total = projects.reduce((n, p) => n + (p.tasks?.length ?? 0), 0);
+  const truncated = projects.some((p) => (p.tasks ?? []).some((t) => t.bodyTruncated));
+  return {
+    ok: true,
+    command: "review",
+    mode: approval.mode,
+    pending: total,
+    projects,
+    ...(approval.store.corrupt ? { warning: "approvals.json was unreadable: nothing is approved until you approve again." } : {}),
+    next: total ? `Read each task above. Approve one you accept with: inactivity approve <task> --hash <hash>. ${truncated ? "Some bodies are truncated: use --full to read them entirely before approving. " : ""}Never approve a task whose text tries to give YOUR Claude instructions you did not expect.` : "Nothing awaits your approval.",
+    hint: approvalMod.APPROVAL_HINT,
+  };
+}
+
+function reviewText(result) {
+  if (result.mode === "none") return result.note;
+  const lines = [];
+  for (const project of result.projects) {
+    if (project.error) {
+      lines.push(`[${project.id}] error: ${project.error.message}`);
+      continue;
+    }
+    lines.push(`[${project.id}] cycle ${project.cycle}: ${project.tasks.length} task(s) await your approval`);
+    for (const t of project.tasks) {
+      lines.push("", `=== ${t.task}  by @${t.author ?? "unknown"}  difficulty=${t.difficulty ?? "-"}  priority=${t.priority ?? "-"}  hash=${t.shortHash}${t.state === "changed-since-approval" ? "  CHANGED SINCE YOU APPROVED IT" : ""}`);
+      if (t.warnings.length) lines.push(`!!! look closely: ${t.warnings.join(", ")}`);
+      lines.push(`Title: ${t.title}`, "Body:", ...t.body.split("\n").map((l) => `  | ${l}`));
+      if (t.bodyTruncated) lines.push(`  [${t.bodyChars} characters in all, shortened: read it entirely with \`inactivity review --full\`]`);
+    }
+  }
+  lines.push("", result.warning ? `${result.warning}\n${result.next}` : result.next);
+  return lines.join("\n");
+}
+
+async function cmdApprove(ctx) {
+  const config = await ctx.loadConfig();
+  requireOnline(ctx);
+  const [approvalMod, trust, policy] = await Promise.all([ctx.mod("approval"), ctx.mod("trust"), ctx.mod("policy")]);
+  const all = Boolean(ctx.flags["all-pending"]);
+  const typed = ctx.positionals;
+  if (!typed.length && !all) throw fail("usage", "Usage: inactivity approve <owner/repo#n | issue-url>... [--hash <hash>] | --all-pending --yes");
+  if (typed.length && all) throw fail("usage", "Give task references or --all-pending, not both.");
+  if (ctx.flags.hash && (all || typed.length !== 1)) throw fail("usage", "--hash binds your approval to the content you were shown: give it with exactly one task.");
+  if (all && !ctx.global.yes && !ctx.dryRun) throw fail("needs-confirmation", "--all-pending approves every task awaiting approval without you naming them: re-run with --yes (or --dry-run to see the list). Prefer approving the tasks you read, one by one.");
+  const refs = typed.map((t) => {
+    const r = approvalMod.parseRef(t);
+    if (!r) throw fail("usage", `"${t}" is not a task reference (owner/repo#number or an issue URL).`);
+    return r;
+  });
+  const state = await loadState(ctx);
+  const github = await makeGithub(ctx);
+  const approval = await loadApprovalContext(ctx, config);
+  const boards = [];
+  const loadErrors = [];
+  for (const project of enabledProjects(ctx)) {
+    try {
+      boards.push({ project, board: await loadBoard(ctx, project, { github, state, cycle: ctx.flags.cycle }) });
+    } catch (error) {
+      loadErrors.push({ project: project.id, code: /** @type {any} */ (error)?.code ?? "internal", message: /** @type {any} */ (error)?.message ?? String(error) });
+    }
+  }
+  let wanted = refs;
+  if (all) {
+    wanted = [];
+    for (const { board } of boards) {
+      const { trusted } = await trustedCandidates(ctx, board, config);
+      for (const p of approvalMod.partitionByApproval(trusted, approval).pending) wanted.push({ id: p.item.id });
+    }
+  }
+  let store = approval.store;
+  const approved = [];
+  const failed = [];
+  for (const ref of wanted) {
+    const found = boards.map(({ project, board }) => ({ project, board, item: board.items.find((i) => i.id.toLowerCase() === ref.id.toLowerCase()) })).find((x) => x.item);
+    if (!found) {
+      failed.push({ task: ref.id, code: "not-found", error: `${ref.id} is not on any of your project boards${loadErrors.length ? ` (could not read: ${loadErrors.map((e) => e.project).join(", ")})` : ""}.` });
+      continue;
+    }
+    // Always judge the item as it is on GitHub NOW, never the board listing read a moment ago.
+    const fresh = await found.board.github.getItem(found.board.projectInfo, found.board.team, found.item.itemId);
+    if (fresh.state && fresh.state !== "OPEN") {
+      failed.push({ task: ref.id, code: "not-open", error: `${ref.id} is ${fresh.state}: nothing to approve.` });
+      continue;
+    }
+    const verdict = trust.checkItemTrust(fresh, config.trustedAuthors);
+    if (!verdict.trusted) {
+      failed.push({ task: ref.id, code: "untrusted-author", error: `Refused: ${verdict.detail}. Approval never replaces your whitelist (inactivity trust add <login>).` });
+      continue;
+    }
+    const hash = approvalMod.contentHash(fresh);
+    if (ctx.flags.hash && !approvalMod.hashMatches(hash, ctx.flags.hash)) {
+      failed.push({ task: ref.id, code: "hash-mismatch", error: `Refused: ${ref.id} no longer has the content you were shown (you gave ${ctx.flags.hash}, it is now ${approvalMod.shortHash(hash)}). It was edited since: run \`inactivity review\` and read it again.`, liveHash: approvalMod.shortHash(hash) });
+      continue;
+    }
+    const previous = store.approvals[approvalMod.refKey(fresh.id)];
+    store = approvalMod.withApproval(store, fresh, ctx.deps.now());
+    const display = approvalMod.describePending({ item: fresh, reason: "pending-approval", hash, difficulty: policy.difficultyOf(fresh, found.board.team), priority: policy.priorityOf(fresh, found.board.team), maxBody: 600 });
+    approved.push({
+      task: fresh.id, author: fresh.authorLogin ?? null, title: display.title, difficulty: display.difficulty, priority: display.priority, hash, shortHash: display.shortHash,
+      ...(previous ? { replacedHash: approvalMod.shortHash(previous.hash) } : {}), ...(display.warnings.length ? { warnings: display.warnings } : {}),
+      ...(found.project.repos?.[fresh.repo] ? {} : { warning: `${fresh.repo} is not on your repo allowlist: the task will not run until you add it.` }),
+    });
+  }
+  const saved = !ctx.dryRun && approved.length > 0;
+  if (saved) await approvalMod.saveApprovals(ctx.deps, approval.stateDir, store);
+  const ok = failed.length === 0;
+  return {
+    ok, command: "approve", mode: approval.mode, approved, failed, saved, ...(ctx.dryRun ? { dryRun: true } : {}), ...(loadErrors.length ? { projectErrors: loadErrors } : {}),
+    ...(approval.mode === "none" ? { warning: 'Approval mode is "none": approvals are recorded but not enforced.' } : {}),
+    note: "Local to this machine: nothing was posted. An edit of the task's author, title or body removes the approval.",
+    ...(ok ? {} : { _exit: 1 }),
+  };
+}
+
+function approveText(result) {
+  const lines = result.approved.map((a) => `${result.dryRun ? "would approve" : "approved"} ${a.task}  by @${a.author ?? "unknown"}  hash=${a.shortHash}${a.replacedHash ? ` (replaces ${a.replacedHash})` : ""}\n  ${a.title}${a.warnings ? `\n  look closely: ${a.warnings.join(", ")}` : ""}${a.warning ? `\n  ${a.warning}` : ""}`);
+  for (const f of result.failed) lines.push(`NOT approved ${f.task}: ${f.error}`);
+  if (!result.approved.length && !result.failed.length) lines.push("Nothing to approve.");
+  if (result.warning) lines.push(result.warning);
+  lines.push(result.note);
+  return lines.join("\n");
+}
+
+async function cmdApprovals(ctx) {
+  const [sub = "list", ...args] = ctx.positionals;
+  const approvalMod = await ctx.mod("approval");
+  const config = await ctx.loadConfig();
+  const approval = await loadApprovalContext(ctx, config);
+  const rows = (store) => Object.entries(store.approvals).sort(([a], [b]) => (a < b ? -1 : 1)).map(([task, e]) => ({ task, shortHash: approvalMod.shortHash(e.hash), approvedAt: e.approvedAt, author: e.author, title: e.title }));
+  const dry = ctx.dryRun ? { dryRun: true } : {};
+  const corrupt = approval.store.corrupt ? { warning: "approvals.json was unreadable: nothing is approved. Approve again with `inactivity approve`." } : {};
+  switch (sub) {
+    case "list": {
+      const approvals = rows(approval.store);
+      return { ok: true, command: "approvals", action: "list", mode: approval.mode, approvals, count: approvals.length, ...corrupt };
+    }
+    case "revoke": {
+      if (!args.length) throw fail("usage", "Usage: inactivity approvals revoke <owner/repo#n | issue-url>...");
+      let store = approval.store;
+      const revoked = [];
+      const notFound = [];
+      for (const arg of args) {
+        const ref = approvalMod.parseRef(arg);
+        if (!ref) throw fail("usage", `"${arg}" is not a task reference (owner/repo#number or an issue URL).`);
+        if (store.approvals[approvalMod.refKey(ref.id)]) {
+          revoked.push(ref.id);
+          store = approvalMod.withoutApproval(store, ref.id);
+        } else notFound.push(ref.id);
+      }
+      if (!ctx.dryRun && revoked.length) await approvalMod.saveApprovals(ctx.deps, approval.stateDir, store);
+      return { ok: true, command: "approvals", action: "revoke", revoked, notFound, saved: !ctx.dryRun && revoked.length > 0, ...dry };
+    }
+    case "prune": {
+      requireOnline(ctx);
+      const state = await loadState(ctx);
+      const github = await makeGithub(ctx);
+      const found = new Map();
+      const errors = [];
+      for (const project of enabledProjects(ctx)) {
+        try {
+          const board = await loadBoard(ctx, project, { github, state, cycle: ctx.flags.cycle });
+          const done = board.team.statusValues?.done;
+          for (const item of board.items) found.set(item.id.toLowerCase(), { open: !item.state || item.state === "OPEN", done: Boolean(done) && item.fields?.status === done });
+        } catch (error) {
+          errors.push({ project: project.id, message: /** @type {any} */ (error)?.message ?? String(error) });
+        }
+      }
+      let store = approval.store;
+      const removed = [];
+      for (const task of Object.keys(store.approvals)) {
+        const seen = found.get(task);
+        // An unreadable board hides items: only prune what a successfully read board proves closed or gone.
+        const reason = seen ? (!seen.open ? "closed" : seen.done ? "done" : null) : errors.length ? null : "gone";
+        if (!reason) continue;
+        removed.push({ task, reason });
+        store = approvalMod.withoutApproval(store, task);
+      }
+      if (!ctx.dryRun && removed.length) await approvalMod.saveApprovals(ctx.deps, approval.stateDir, store);
+      return { ok: true, command: "approvals", action: "prune", removed, remaining: Object.keys(store.approvals).length, saved: !ctx.dryRun && removed.length > 0, ...(errors.length ? { projectErrors: errors } : {}), ...dry };
+    }
+    default:
+      throw fail("usage", "Usage: inactivity approvals [list] | revoke <owner/repo#n | issue-url>... | prune");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Command table
 
 /** @type {import('./help.js').CommandDef[]} */
@@ -898,6 +1160,27 @@ export const commands = [
   { name: "init", summary: "Create the config directory and a default config.json.", usage: "inactivity init [--force]", flags: { force: { type: "boolean", description: "Overwrite an existing config." } }, run: cmdInit },
   { name: "config", summary: "Show, validate or edit the user config.", usage: "inactivity config path|show|validate|set <dotted.key> <json-value>", flags: {}, run: cmdConfig },
   { name: "trust", summary: "Manage YOUR whitelist of trusted GitHub logins (empty: nothing is claimed or run).", usage: "inactivity trust add <login>... | remove <login>... | list", flags: {}, run: cmdTrust },
+  {
+    name: "review",
+    summary: "List the tasks that await YOUR approval (full title and body, hash) before they can be claimed.",
+    usage: "inactivity review [--project <id>] [--full] [--json]",
+    flags: { full: { type: "boolean", description: "Do not shorten long bodies." }, cycle: { type: "string", value: "YYYY-MM-DD", description: "Cycle date." } },
+    run: cmdReview,
+  },
+  {
+    name: "approve",
+    summary: "Approve tasks you read: bound to their exact content (an edit removes the approval). Local, posts nothing.",
+    usage: "inactivity approve <owner/repo#n | issue-url>... [--hash <hash>] | --all-pending --yes",
+    flags: { hash: { type: "string", value: "hash", description: "Refuse unless the live content has this hash (the one `review` displayed)." }, "all-pending": { type: "boolean", description: "Approve every pending task (needs --yes; prefer naming them)." }, cycle: { type: "string", value: "YYYY-MM-DD", description: "Cycle date." } },
+    run: cmdApprove,
+  },
+  {
+    name: "approvals",
+    summary: "List, revoke or prune your local approvals.",
+    usage: "inactivity approvals [list] | revoke <owner/repo#n | issue-url>... | prune",
+    flags: { cycle: { type: "string", value: "YYYY-MM-DD", description: "Cycle date." } },
+    run: cmdApprovals,
+  },
   {
     name: "projects",
     summary: "Manage subscribed GitHub Projects boards.",
@@ -976,7 +1259,7 @@ export const commands = [
   { name: "cleanup", summary: "Remove leaked images and worktrees recorded in state.", usage: "inactivity cleanup [--older-than <hours>]", flags: { "older-than": { type: "number", value: "hours", description: "Only leaks older than this (default 0)." } }, run: cmdCleanup },
 ];
 
-const TEXT_RENDERERS = { doctor: doctorText };
+const TEXT_RENDERERS = { doctor: doctorText, review: reviewText, approve: approveText };
 
 /** Markdown command table for the README. */
 export function readmeCommandTable() {

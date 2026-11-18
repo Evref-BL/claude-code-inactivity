@@ -30,6 +30,7 @@ const MODULE_FILES = {
   gitwork: './gitwork.js',
   ledger: './ledger.js',
   claims: './claims.js',
+  approval: './approval.js',
   policy: './policy.js',
   configMod: './config.js',
 };
@@ -165,7 +166,7 @@ function resultText(parsed) {
 }
 
 function infraReleaseReason(reason) {
-  return reason === 'limit' ? 'limit' : 'infra';
+  return ['limit', 'untrusted-author', 'not-approved'].includes(reason) ? reason : 'infra';
 }
 
 /**
@@ -180,7 +181,7 @@ export async function runTask(deps, params) {
     assignment, dryRun = false, keep = false, forced = false, noPr = false,
   } = params;
   const mods = await loadModules(deps);
-  const { pharo, claudeRun, gitwork, ledger, claims, policy } = mods;
+  const { pharo, claudeRun, gitwork, ledger, claims, policy, approval } = mods;
   const stateDir = await resolveStateDir(deps, params, mods);
   const difficulty = assignment?.difficulty ?? policy.difficultyOf(task, team);
   const ma = policy.modelArgs({ difficulty, team, config });
@@ -360,6 +361,12 @@ export async function runTask(deps, params) {
 
   const eventsOf = (item) => claims.collectEvents({ items: [item], team, cycle, cfg: policy.digestTeam(team) }).events;
 
+  async function checkApproval(item) {
+    const mode = approval.approvalMode(config);
+    if (mode === 'none') return { approved: true };
+    return approval.checkItemApproval(item, { mode, store: await approval.loadApprovals(deps, stateDir) });
+  }
+
   function checkGate(fresh) {
     if (fresh.state && fresh.state !== 'OPEN') throw new Abort('not-open', fresh.state);
     if ((fresh.labels ?? []).includes('inactivity:skip')) throw new Abort('skip-label');
@@ -418,6 +425,19 @@ export async function runTask(deps, params) {
         }
         throw new Abort('untrusted-author', verdict.detail, 'released');
       }
+      // Approval gate 3 of 3 (never bypassed, `--force` included): this member must have approved the CONTENT of the
+      // freshly fetched item (author, title, body). Read from disk now: a revocation or an edit counts immediately.
+      const approved = await checkApproval(fresh);
+      if (!approved.approved) {
+        if (forced) throw new Abort('not-approved', approved.detail);
+        try {
+          await postLifecycle('release', { reason: 'not-approved' });
+          await setStatus({ status: statusValues.ready ?? 'Todo', agent: '' });
+        } catch (err) {
+          deps.log.warn(`release(not-approved) failed: ${err?.message ?? err}`);
+        }
+        throw new Abort('not-approved', approved.detail, 'released');
+      }
       work = { ...task, title: fresh.title, body: fresh.body };
       await postLifecycle('start', { model: chosen.tier });
       ctx.startPosted = true;
@@ -425,6 +445,8 @@ export async function runTask(deps, params) {
       const after = await github.getItem(projectInfo, team, task.itemId);
       const verdictAfter = checkItemTrust(after, config.trustedAuthors);
       if (!verdictAfter.trusted) throw failure('untrusted-author', verdictAfter.detail);
+      const approvedAfter = await checkApproval(after);
+      if (!approvedAfter.approved) throw failure('not-approved', approvedAfter.detail);
       work = { ...task, title: after.title, body: after.body };
       if (!forced) {
         const first = claims.earliestStart({ events: eventsOf(after).filter((e) => e.task === task.id), task: task.id, cycle });

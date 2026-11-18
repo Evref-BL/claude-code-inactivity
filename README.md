@@ -60,6 +60,7 @@ group ([docs/board-lockdown.md](docs/board-lockdown.md)).
 | Skill | Purpose |
 | --- | --- |
 | `/clode-inactivity:setup` | Guided setup: doctor, token, config, board, warmup, scheduler. |
+| `/clode-inactivity:review` | Read and approve, ticket by ticket, what may run on your Claude account (evenings). |
 | `/clode-inactivity:status` | Read-only snapshot of cycle, offer, resolution and runs. |
 | `/clode-inactivity:run-now` | Run one assigned task immediately (asks first). |
 | `/clode-inactivity:board-guide` | How to write tasks the agent can finish. |
@@ -72,6 +73,9 @@ group ([docs/board-lockdown.md](docs/board-lockdown.md)).
 | `inactivity init [--force]` | Create the config directory and a default config.json. |
 | `inactivity config path\|show\|validate\|set <dotted.key> <json-value>` | Show, validate or edit the user config. |
 | `inactivity trust add <login>... \| remove <login>... \| list` | Manage YOUR whitelist of trusted GitHub logins (empty: nothing is claimed or run). |
+| `inactivity review [--project <id>] [--full] [--json]` | List the tasks that await YOUR approval (full title and body, hash) before they can be claimed. |
+| `inactivity approve <owner/repo#n \| issue-url>... [--hash <hash>] \| --all-pending --yes` | Approve tasks you read: bound to their exact content (an edit removes the approval). Local, posts nothing. |
+| `inactivity approvals [list] \| revoke <owner/repo#n \| issue-url>... \| prune` | List, revoke or prune your local approvals. |
 | `inactivity projects add --owner <o> --number <n> (--policy-repo <o/r> \| --team-file <f>) [--repo <o/r>[=url]]... \| list \| remove <id> \| check <id>` | Manage subscribed GitHub Projects boards. |
 | `inactivity team init [--out <file>] [--timezone <tz>] [--member <login>]... \| show \| check <file>` | Create, check or show the shared team policy. |
 | `inactivity doctor [--online] [--skip-pharo] [--smoke-claude]` | Check the environment (Node, claude, GitHub token, PLexus, scheduler). |
@@ -95,7 +99,8 @@ document: `{"ok":true,...}` or `{"ok":false,"code":"...","error":"..."}`.
 
 ## Configuration in one minute
 
-Per member, `config.json` (never contains secrets): **`trustedAuthors`** (your own
+Per member, `config.json` (never contains secrets): **`approval`** (`local` by
+default: you approve each ticket, see "Security model"), **`trustedAuthors`** (your own
 whitelist of GitHub logins, empty by default: nothing is claimed or run until you
 add some, see "Security model"), subscribed projects and the
 repo allowlist, `allowPublicBoard`, `availability` (days, `dailyPoints`, `maxTasksPerDay`, `models`,
@@ -120,6 +125,14 @@ edit a task on the board could try to prompt-inject your Claude. Mitigations:
   vetted. Being on the team roster or an organization member grants no trust.
   Claim resolution does not depend on anybody's whitelist: a task nobody trusts
   simply gets no claim.
+- **Your own manual approval of every ticket** (`approval: "local"`, default).
+  A task is claimed and run on your machine only after you read it and ran
+  `inactivity approve` (`inactivity review` lists what waits, best in the evening
+  before the claim window). The approval is bound to a hash of the author, title and
+  body: an edit afterwards voids it, so the task is not claimed, an assignment is
+  released (`not-approved`) and a run refuses to start, `--force` included.
+  Approvals are local (`approvals.json` in the state dir), never shared.
+  `config set approval none --yes` switches it off; `doctor` then warns.
 - **Lock the board down on GitHub** (private project, access limited to the
   group, no outside collaborators): [docs/board-lockdown.md](docs/board-lockdown.md).
   `inactivity projects check` and `doctor --online` fail on a public board.
@@ -152,7 +165,7 @@ use Claude Code InActivity for the unattended runs.
 ## Troubleshooting
 
 Run `inactivity doctor --online`. Check ids: `node`, `config`, `projects`,
-`trusted-authors`, `timezone`, `git`, `claude-cli`, `claude-auth`, `anthropic-api-key`,
+`trusted-authors`, `approval-mode`, `timezone`, `git`, `claude-cli`, `claude-auth`, `anthropic-api-key`,
 `claude-smoke`, `github-token`, `gh-cli`, `github-viewer`, `github-scopes`,
 `board-exposure`, `projects-online`, `npx`, `plexus`, `pharo-launcher`, `scheduler`,
 `state-dir`, `disk`. Each failing check prints a `fix`. Leaked images or

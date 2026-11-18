@@ -6,6 +6,7 @@ import { canonicalJson, sha256Hex, digest, compareStrings, DispatchError, saniti
 import { zonedToUtc, addDays, addMinutes, formatLocal } from './time.js';
 import { digestTeam, sortCandidates, difficultyOf, costOf, tierFor } from './policy.js';
 import { partitionByTrust } from './trust.js';
+import { partitionByApproval } from './approval.js';
 
 export const MARKER_PREFIX = 'inactivity:v1';
 
@@ -760,11 +761,13 @@ function checked(payload) {
  * nothing is claimed. The whitelist is member-private and is not an input of `resolveCycle`.
  * @param {{team:object, cycle:string, round:1|2, login:string, offer:{capacity:number,models:string[]}|null,
  *   candidates:BoardItem[], repoAllowlist:string[]|Record<string,unknown>, existing?:Array<ClaimEvent|object>,
- *   hardDifficultyAllowed?:boolean, trustedAuthors?:string[], runId?:string, ts?:string}} args
+ *   hardDifficultyAllowed?:boolean, trustedAuthors?:string[], approval?:{mode?:'local'|'none', store?:object}, runId?:string, ts?:string}} args
  */
-export function buildClaims({ team, cycle, round, login, offer, candidates: cand, repoAllowlist, existing = [], hardDifficultyAllowed, trustedAuthors, runId, ts }) {
+export function buildClaims({ team, cycle, round, login, offer, candidates: cand, repoAllowlist, existing = [], hardDifficultyAllowed, trustedAuthors, approval, runId, ts }) {
   if (!offer || !isInt(offer.capacity) || offer.capacity < 1) return [];
   cand = partitionByTrust(cand, trustedAuthors).trusted;
+  // Approval gate 1 of 3: only tasks THIS member approved at their current content (absent argument: nothing approved).
+  cand = partitionByApproval(cand, approval).approved;
   const t = teamDefaults(team);
   const me = lc(login);
   const roster = rosterMap(team).get(me);

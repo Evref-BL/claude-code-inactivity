@@ -4,6 +4,7 @@ import path from 'node:path';
 import { DispatchError, atomicWriteJson } from './util.js';
 import { validateTeam, TIERS, DIFFICULTIES, WEEKDAYS, EFFORTS } from './policy.js';
 import { normalizeLogin } from './trust.js';
+import { APPROVAL_MODES } from './approval.js';
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const nonEmpty = (v) => typeof v === 'string' && v.trim() !== '';
@@ -44,6 +45,9 @@ export function defaultConfig() {
     // This member's own whitelist of GitHub logins whose tasks they accept (docs/design.md 1.5, src/trust.js).
     // Empty = secure by default: nothing is claimed or executed until logins are added.
     trustedAuthors: [],
+    // Manual per-ticket approval (docs/design.md 1.5, src/approval.js): 'local' (default, secure) = a task is claimed and
+    // run only after THIS member approved its exact content with `inactivity approve`; 'none' = explicit opt-in, no approval.
+    approval: 'local',
     // Opt-in: tolerate a PUBLIC project board (doctor and `projects check` fail on one otherwise). A project may override it.
     allowPublicBoard: false,
     projects: [],
@@ -138,7 +142,7 @@ export function validateConfig(input) {
     return res;
   };
 
-  const TOP = ['$schema', 'version', 'login', 'trustedAuthors', 'allowPublicBoard', 'projects', 'availability', 'modelOverrides', 'effort', 'execution',
+  const TOP = ['$schema', 'version', 'login', 'trustedAuthors', 'approval', 'allowPublicBoard', 'projects', 'availability', 'modelOverrides', 'effort', 'execution',
     'permissions', 'pharo', 'claude', 'git', 'github', 'schedule', 'dryRun'];
   for (const k of Object.keys(src)) if (!TOP.includes(k)) err(`/${k}`, 'unknown property');
 
@@ -158,6 +162,7 @@ export function validateConfig(input) {
       });
     }
   }
+  out.approval = oneOf(src.approval, '/approval', APPROVAL_MODES, 'local');
   out.allowPublicBoard = bool(src.allowPublicBoard, '/allowPublicBoard', false);
 
   // Projects

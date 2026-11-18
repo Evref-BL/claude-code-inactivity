@@ -633,7 +633,7 @@ test('buildClaims: ranked in candidate order, capped, allowlisted, feasible, ski
     mkItem(6, { priority: 'P3', difficulty: 'easy' }),
     mkItem(7, { priority: 'P3', difficulty: 'easy' }),
   ];
-  const args = { team, cycle: CYCLE, round: 1, login: 'Alice', offer: { capacity: 6, models: ['haiku', 'sonnet'] }, candidates: items, repoAllowlist: ['org/repo'], trustedAuthors: ['maint'], runId: 'run1', ts: T('06:10') };
+  const args = { team, cycle: CYCLE, round: 1, login: 'Alice', offer: { capacity: 6, models: ['haiku', 'sonnet'] }, candidates: items, repoAllowlist: ['org/repo'], trustedAuthors: ['maint'], approval: { mode: 'none' }, runId: 'run1', ts: T('06:10') };
   const out = buildClaims(args);
   assert.deepEqual(out.map((p) => [p.task, p.rank]), [['org/repo#1', 1], ['org/repo#3', 2], ['org/repo#5', 3]]);
   assert.deepEqual(out[0], {
@@ -665,10 +665,10 @@ test('buildClaims: ranked in candidate order, capped, allowlisted, feasible, ski
 test('buildClaims: roster ceilings apply and non-roster logins claim nothing', () => {
   const team = mkTeam({ roster: [{ login: 'alice', maxCapacity: 2, models: ['haiku', 'sonnet'] }, { login: 'bob' }] });
   const items = [mkItem(1, { difficulty: 'medium' })];
-  const out = buildClaims({ team, cycle: CYCLE, round: 1, login: 'alice', offer: { capacity: 9, models: ['sonnet', 'opus'] }, candidates: items, repoAllowlist: { 'org/repo': {} }, trustedAuthors: ['maint'] });
+  const out = buildClaims({ team, cycle: CYCLE, round: 1, login: 'alice', offer: { capacity: 9, models: ['sonnet', 'opus'] }, candidates: items, repoAllowlist: { 'org/repo': {} }, trustedAuthors: ['maint'], approval: { mode: 'none' } });
   assert.equal(out[0].capacity, 2);
   assert.deepEqual(out[0].models, ['sonnet']);
-  assert.deepEqual(buildClaims({ team, cycle: CYCLE, round: 1, login: 'mallory', offer: { capacity: 5, models: ['haiku'] }, candidates: items, repoAllowlist: ['org/repo'], trustedAuthors: ['maint'] }), []);
+  assert.deepEqual(buildClaims({ team, cycle: CYCLE, round: 1, login: 'mallory', offer: { capacity: 5, models: ['haiku'] }, candidates: items, repoAllowlist: ['org/repo'], trustedAuthors: ['maint'], approval: { mode: 'none' } }), []);
 });
 
 test('buildAssign / buildLifecycle: valid payloads, whitelisted extras, errors on bad input', () => {
@@ -906,7 +906,7 @@ test('property: round 2 results are also order independent', () => {
 
 const claimArgs = (team, items, extra = {}) => ({
   team, cycle: CYCLE, round: 1, login: 'alice', offer: { capacity: 8, models: ['haiku', 'sonnet', 'opus'] }, candidates: items,
-  repoAllowlist: ['org/repo'], runId: 'run1', ts: T('06:10'), ...extra,
+  repoAllowlist: ['org/repo'], approval: { mode: 'none' }, runId: 'run1', ts: T('06:10'), ...extra,
 });
 
 test('trust: an empty or missing whitelist claims nothing (secure by default)', () => {

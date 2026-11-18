@@ -16,7 +16,8 @@ const NOW = new Date("2026-11-19T04:10:00Z");
 // Fakes
 
 function fakeConfigModule() {
-  const defaults = () => ({ version: 1, login: null, projects: [], availability: {}, execution: { mutationDelayMs: 0 } });
+  // approval "none": these tests are about claims and resolution, the approval gate has its own tests (approval.test.js)
+  const defaults = () => ({ version: 1, login: null, approval: "none", projects: [], availability: {}, execution: { mutationDelayMs: 0 } });
   return {
     resolvePaths(env) {
       const home = env.INACTIVITY_HOME;
@@ -787,6 +788,28 @@ test("doctor: an empty trusted-authors list is a warning with the fix, a filled 
   const ok = filled.json.checks.find((c) => c.id === "trusted-authors");
   assert.equal(ok.level, "ok");
   assert.match(ok.message, /alice/);
+});
+
+test("doctor: approval-mode is ok when local, warns when none (with the fix) and when approvals.json is unreadable", async (t) => {
+  const h = await harness(t);
+  await h.run("init");
+  const raw = async (patch) => fsp.writeFile(path.join(h.home, "config.json"), JSON.stringify({ version: 1, projects: [], ...patch }));
+  const check = async () => (await h.run("doctor", "--skip-pharo", "--json")).json.checks.find((c) => c.id === "approval-mode");
+  await raw({ approval: "local" });
+  const local = await check();
+  assert.equal(local.level, "ok");
+  assert.match(local.message, /exact content/);
+  await fsp.mkdir(path.join(h.home, "state"), { recursive: true });
+  await fsp.writeFile(path.join(h.home, "state", "approvals.json"), "{broken");
+  const corrupt = await check();
+  assert.equal(corrupt.level, "warn");
+  assert.match(corrupt.message, /unreadable/);
+  await fsp.rm(path.join(h.home, "state", "approvals.json"));
+  await raw({ approval: "none" });
+  const none = await check();
+  assert.equal(none.level, "warn");
+  assert.match(none.message, /without you reading it/);
+  assert.match(none.fix, /config set approval "local"/);
 });
 
 /** The default fake GitHub module with a board that is (or is not) public and repos of a given visibility. */

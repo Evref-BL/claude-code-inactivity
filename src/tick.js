@@ -14,6 +14,7 @@ import * as claimsMod from './claims.js';
 import * as policyMod from './policy.js';
 import * as runnerMod from './runner.js';
 import * as trustMod from './trust.js';
+import * as approvalMod from './approval.js';
 import { allowsPublicBoard } from './exposure.js';
 
 const SIX_HOURS = 6 * 3600 * 1000;
@@ -127,6 +128,7 @@ function createTickEnv(deps, { config, dryRun, state, stateDir }) {
     policy: deps.modules?.policy ?? policyMod,
     runner: deps.modules?.runner ?? runnerMod,
     trust: deps.modules?.trust ?? trustMod,
+    approval: deps.modules?.approval ?? approvalMod,
   };
   const ctx = {
     deps,
@@ -425,6 +427,18 @@ async function claimStage(stage, round) {
     }
     stage.deps.log?.info?.(`tick: project ${project.id}: ${trust.untrusted.length} candidate task(s) skipped, author not in trustedAuthors`);
   }
+  // Approval gate 1 of 3: only tasks I read and approved (at their current content) are claimed. Read fresh from disk:
+  // an approval given a minute ago counts, a revocation too.
+  const approval = { mode: mods.approval.approvalMode(config), store: await mods.approval.loadApprovals(stage.deps, stage.env.stateDir) };
+  const approvalSplit = mods.approval.partitionByApproval(trust.trusted.filter((i) => !stage.incomplete?.has(i.id)), approval);
+  if (approvalSplit.pending.length > 0) {
+    entry.pendingApproval = {
+      count: approvalSplit.pending.length,
+      tasks: approvalSplit.pending.slice(0, 50).map((p) => ({ task: p.task, round, reason: p.reason })),
+      hint: mods.approval.APPROVAL_HINT,
+    };
+    stage.deps.log?.warn?.(`tick: project ${project.id}: ${approvalSplit.pending.length} task(s) await your approval and are not claimed. ${mods.approval.APPROVAL_HINT}`);
+  }
   const payloads = mods.claims.buildClaims({
     team,
     cycle: plan.cycle,
@@ -437,11 +451,15 @@ async function claimStage(stage, round) {
     existing: myEvents(stage, events, round),
     hardDifficultyAllowed: config.availability?.hardDifficultyAllowed === true,
     trustedAuthors: config.trustedAuthors,
+    approval,
     runId: stage.env.runId(),
     ts: stage.stamp(),
   });
   if (payloads.length === 0) {
-    entry.actions.push({ type: 'noop', round, detail: trust.trusted.length === 0 && trust.untrusted.length > 0 ? { reason: 'untrusted-author', tasks: trust.untrusted.length } : 'no-claimable-task' });
+    const detail = approvalSplit.pending.length > 0
+      ? { reason: 'pending-approval', tasks: approvalSplit.pending.length, hint: mods.approval.APPROVAL_HINT }
+      : trust.trusted.length === 0 && trust.untrusted.length > 0 ? { reason: 'untrusted-author', tasks: trust.untrusted.length } : 'no-claimable-task';
+    entry.actions.push({ type: 'noop', round, detail });
     return;
   }
   const tasks = [];
@@ -472,7 +490,7 @@ async function claimStage(stage, round) {
 
 /** Resolve every newly resolved round, post `assign` for my tasks (5.6.1). */
 async function resolveStage(stage, rounds) {
-  const { mods, config, team, plan, cycleState, state, login, items, byId, github, projectInfo, entry, dryRun } = stage;
+  const { deps, mods, config, team, plan, cycleState, state, login, items, byId, github, projectInfo, entry, dryRun } = stage;
   if (rounds.length === 0) return null;
   if (stage.incomplete?.size) {
     // Some comments could not be read: claims, assigns and `done` history may be missing. Never resolve on partial input.
@@ -503,6 +521,18 @@ async function resolveStage(stage, rounds) {
           const payload = mods.claims.buildLifecycle({ kind: 'release', team, cycle: plan.cycle, round: r, login, task: a.task, runId: stage.env.runId(), extra: { reason: 'untrusted-author' } });
           await postEvent(stage, item, payload);
           cycleState.assigned[a.task] = { round: r, model: a.model, difficulty: a.difficulty, points: a.points, assignPosted: false, startedAt: null, outcome: 'released', reason: 'untrusted-author', runId: null };
+        }
+        continue;
+      }
+      // Approval gate 2 of 3: the task must still be approved at its CURRENT content (it may have been edited, or the
+      // approval revoked, since I claimed). Otherwise release it with a reason and run nothing.
+      const approvalVerdict = mods.approval.checkItemApproval(item, { mode: mods.approval.approvalMode(config), store: await mods.approval.loadApprovals(deps, stage.env.stateDir) });
+      if (!approvalVerdict.approved) {
+        entry.actions.push({ type: 'release', task: a.task, round: r, detail: { reason: 'not-approved', why: approvalVerdict.reason }, ...(dryRun ? { dryRun: true } : {}) });
+        if (!dryRun) {
+          const payload = mods.claims.buildLifecycle({ kind: 'release', team, cycle: plan.cycle, round: r, login, task: a.task, runId: stage.env.runId(), extra: { reason: 'not-approved' } });
+          await postEvent(stage, item, payload);
+          cycleState.assigned[a.task] = { round: r, model: a.model, difficulty: a.difficulty, points: a.points, assignPosted: false, startedAt: null, outcome: 'released', reason: 'not-approved', runId: null };
         }
         continue;
       }

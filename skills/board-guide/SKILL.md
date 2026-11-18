@@ -48,3 +48,15 @@ someone who is not on a member's own trusted-authors list are skipped by that
 member until a trusted author recreates them: editing a vetted issue as someone
 else makes it untrusted again, so let the author edit it. Mark such work
 `Blocked` or leave it out of `Todo`.
+
+## Write for a human reviewer
+
+Every member reads and approves each ticket before their Claude may run it
+(`inactivity review`, usually the evening before the claim window). Write the title
+and body so that a person can judge them in half a minute: say what to change and
+how to verify it, in plain text, with no hidden HTML comments, no invisible
+characters and no instructions aimed at an AI. A ticket that is **edited after a
+member approved it loses that approval** and is not claimed or run by that member
+until they read it again, so finish editing before the evening review and do not
+tweak a ticket on the morning of the run. Tickets that ask for secrets, shell
+commands or network access will (rightly) be refused.

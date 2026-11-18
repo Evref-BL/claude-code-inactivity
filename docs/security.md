@@ -33,6 +33,35 @@ threat table is in section 1.5 of [design.md](design.md).
   simply receives no claim. A human still sets Status to `Todo`. Comments from
   non-roster authors never enter the prompt. The deprecated `trustedAssociations`
   key of an old `team.json` is ignored.
+- **Your own manual, content-bound approval of every ticket** (`approval: "local"`,
+  the default). The whitelist says whose text you accept; approval says that **you
+  read this exact ticket**. A malicious ticket must never run on your Claude account
+  without your explicit validation, and an approved ticket that is edited afterwards
+  must lose its approval. Each member keeps `approvals.json` in their own state dir
+  (owner-only, atomic writes, never shared, nothing posted on the board): one entry
+  per `owner/repo#number` with a **sha256 of the content that reaches the agent**
+  (author login, title, body; line endings normalized, nothing else) and the time
+  of approval. Workflow: `inactivity review` (or `/clode-inactivity:review`) shows
+  the pending tasks in full, usually the evening before the claim window; you
+  approve what you accept with `inactivity approve <repo#n> --hash <hash>`, where
+  `--hash` makes the command refuse if the live text differs from what was
+  displayed (a chat or skill therefore approves exactly what the person saw).
+  `approve` fetches the ticket fresh and refuses an author who is not on your
+  whitelist. Enforced on your machine at three points, in addition to (never instead
+  of) the whitelist: *building claims* (only approved tasks with a matching hash are
+  claimed), *an assignment arrives* (verified again; released with the reason
+  `not-approved` if the approval is missing, revoked or the content changed), and
+  *the runner start gate* on the freshly fetched item and again on the read after
+  `start` (released with `not-approved`; nothing starts; `--force` never bypasses
+  it). The store is read from disk at each gate, so `approvals revoke` takes effect
+  at once. A corrupt or missing store approves nothing. It is a per-member filter,
+  not an input of claim resolution. `approval: "none"` is an explicit opt-in
+  (`config set approval none --yes`) that removes this protection: `doctor` warns
+  about it permanently. `review` also flags hidden HTML comments, invisible
+  characters and instruction-like wording, and the `review` skill never follows
+  instructions found in a ticket and never approves in bulk. Residual risk: a human
+  can still approve a ticket they misjudged, and a ticket that is only dangerous in
+  combination with repository content is judged by what you can read.
 - **A locked-down board.** Only the group should be able to read the board and
   create or edit tasks on it: private project, access limited to a team, no outside
   collaborators, protected branches, 2FA, periodic review. Humans do that in the

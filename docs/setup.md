@@ -79,6 +79,30 @@ the last editor of an issue must both be on the list at run time. `doctor` warns
 while the list is empty, and `status` lists the tasks skipped as untrusted with
 their author.
 
+### Approve every ticket yourself
+
+The whitelist is not enough on its own: an account can be compromised and an
+issue can be rewritten. By default (`approval: "local"`) a task is claimed and run
+only after **you read it and approved its exact content**:
+
+```
+inactivity review                       # tasks awaiting your approval: full title and body, author, hash
+inactivity approve acme/widgets#12 --hash 3fa91c0d77ab   # the hash `review` displayed
+inactivity approvals                    # what you approved (list | revoke <ref> | prune)
+```
+
+Do it in the evening, before the claim window (or use `/clode-inactivity:review`,
+which shows each ticket and asks you one by one). The approval is bound to the
+author, title and body: if the ticket is edited afterwards the approval is void
+(`review` then shows it as `changed-since-approval`), the task is not claimed, an
+assignment is released with the reason `not-approved`, and a run refuses to start,
+`--force` included. Approvals live in `approvals.json` in your state directory and
+are never shared; `tick` reports how many tasks await approval. `--hash` makes
+`approve` fail if the text changed since you read it; `--all-pending --yes` exists
+but approves tasks you did not name, so avoid it. Turning approval off
+(`config set approval none --yes`) lets any task of a trusted author run unread:
+`doctor` warns about it.
+
 Also restrict the board to the members of the group: see
 [board-lockdown.md](board-lockdown.md) (private project, base role, team access,
 branch protection, 2FA, periodic review). `projects check` and `doctor --online`
@@ -135,7 +159,7 @@ cannot break the job; re-run it after updating the plugin (`doctor` id
 
 ## 6. Day-to-day
 
-`status` shows what happened; `pause --for 3d` and `resume` control
+`review` before each morning; `status` shows what happened (and what awaits approval); `pause --for 3d` and `resume` control
 availability (open claims are withdrawn, unstarted assignments released on the
 next tick); `run` executes a task immediately; `cleanup` removes recorded
 leaks. Uninstall: `schedule uninstall`.
