@@ -14,7 +14,7 @@ Team policy (committed in the board's policy repo): claim window 06:00-10:00 Eur
 | Local time | What happens on every member's machine (independently) |
 | --- | --- |
 | before 06:00 | `tick` computes the phase from the cached team policy, finds nothing to do, exits in milliseconds without touching the network. |
-| 06:10 | First tick inside the window. Alice's `tick` reads the board (one GraphQL query), lists candidate tasks (Status = Todo, issue-backed, trusted author), builds her offer (capacity 6 points, models sonnet+opus, from her local availability), and posts one hidden-marker `claim` comment per chosen task (max 8, ranked). Bob and Chen do the same at their own first tick (06:00-10:00, order does not matter). |
+| 06:10 | First tick inside the window. Alice's `tick` reads the board (one GraphQL query), lists candidate tasks (Status = Todo, issue-backed), keeps those whose author and last editor are on **her own** trusted-authors list, builds her offer (capacity 6 points, models sonnet+opus, from her local availability), and posts one hidden-marker `claim` comment per chosen task (max 8, ranked). Bob and Chen do the same at their own first tick (06:00-10:00, order does not matter). |
 | 10:00 | Window closes. Comments created after 10:00:00 (GitHub server time) are ignored. |
 | 10:01 | Grace over. Every client now recomputes the same pure function `resolveCycle(team, board, comments)` and gets the same assignment table. |
 | 10:10 | Alice's `tick` sees she owns 2 tasks. She posts an `assign` comment on each (audit trail), sets Status = `Claimed`, then starts the first task: fresh git worktree, disposable Pharo image through PLexus, baseline loaded, `claude -p --model sonnet ...` headless, verification, commit, push of `inactivity/alice/42-fix-parser`, **draft PR**, `done` comment, Status = `In review`. Image and worktree are deleted in `finally`. |
@@ -50,7 +50,9 @@ An unattended `claude -p` runs with a member's credentials and edits code from i
 
 | Threat | Mitigation (all MUST) |
 | --- | --- |
-| Prompt injection from issue body/comments/title, Tonel files, test output | Task text is wrapped in an `<untrusted_task_data>` block (escaped, truncated); system prompt states it is data. Only items whose issue `authorAssociation` is in `trustedAssociations` (default OWNER, MEMBER, COLLABORATOR) or whose author is on the roster are ever executed. Human-set Status = Todo is the "approved" gate. Comments from non-roster authors are never put in the prompt. |
+| Prompt injection from issue body/comments/title, Tonel files, test output | Task text is wrapped in an `<untrusted_task_data>` block (escaped, truncated); system prompt states it is data. Human-set Status = Todo is the "approved" gate. Comments from non-roster authors are never put in the prompt. Plus the **per-member trust whitelist** (next row). |
+| **Anyone who can create or edit a task on the board prompt-injects another member's Claude** (including: a stranger on a public repo or board, an outside collaborator, a member whose account is compromised, a trusted person's issue rewritten by somebody else) | **Per-member whitelist of trusted GitHub logins**, `trustedAuthors` in the member's own user config (4.2): private to that machine, not shared, **not in `team.json`**, **empty by default** (secure by default: nothing is claimed or executed until the member adds logins; `doctor`, `tick`, `claim` and `status` say so and how to fix it). Neither `authorAssociation` nor the roster grants trust; the old `trustedAssociations` key is deprecated and ignored. It is enforced on the member's own machine at **three points**: (1) `buildClaims` never claims a task whose issue author is not whitelisted; (2) when an assignment arrives (`tick` step 5.6.0, `resolve --post-assign`) the task is verified again and, if it fails, released with `reason=untrusted-author` instead of being acknowledged; (3) the runner start gate (7.2 step 2) on a **freshly fetched** item, `--force` included: the issue **author**, the **last editor** of the body (`editor`/`lastEditedAt`, when the item was ever edited) and the **last renamer** of the title (`RENAMED_TITLE_EVENT`) must all be whitelisted, else the run ends `released/untrusted-author` and nothing starts (no clone, no image, no `claude`); the agent then reads exactly the title and body that passed this check (re-verified on a second read after `start`). Logins compare case-insensitively (`trust.actorKey`); a **bot** is trusted only if listed explicitly as `name[bot]`; a mannequin, an organization, a deleted or unknown account is never trusted. **Claim resolution stays a deterministic pure function shared by all members and does not depend on any member's whitelist** (5.4, 5.5): trust is a per-member filter on what a member claims and executes, so a task nobody trusts simply gets no claims, and two members with different lists compute the same table from the same comments. |
+| The board itself is readable or writable by outsiders (public project, outside collaborators, repo open to anyone, auto-add workflows, unreviewed merges) | **Board lockdown at GitHub level**, done by humans in the GitHub UI because the group's members are the only people who should reach the board: private project, base role No access/Read and a team with Write, no outside collaborators, private repos or interaction limits, branch protection so the bot's draft PRs need review, 2FA, periodic access review: `docs/board-lockdown.md`. Code only *checks* (4.7): `projects check` and `doctor --online` read the ProjectV2 `public` flag, repo `isPrivate`/`visibility` and the teams linked to the board; a public board is a **fail** unless `allowPublicBoard` is explicitly `true`, a public repo a warn, what the API cannot show (direct collaborators, base role) is reported `unknown` with a hint. |
 | Agent runs arbitrary shell/network, reads machine secrets | Never `--dangerously-skip-permissions`, never `--bare`. `--permission-mode dontAsk --permission-prompts none` plus an explicit allowlist: `Read/Glob/Grep/Edit/Write` scoped to the worktree (`(./**)`) with deny rules for `~/.ssh`, `~/.config/gh`, `~/.claude`, `~/.aws`, `/etc`, `.env*`, keys; **no `Bash` at all** (a prefix rule such as `git grep *` is not safe: `git grep -O<cmd>` and `git diff --output=<file>` execute commands and write files) and a generic `Bash` deny; an explicit list of Pharo tools (`PHARO_AGENT_TOOLS`), never the whole `mcp__pharo` server. No `WebFetch`/`WebSearch`. |
 | Pharo MCP is code execution (`image_evaluate` can shell out via Smalltalk) | `image_evaluate` and the image lifecycle tools are **denied by default** (`PHARO_DENIED_TOOLS`); the agent only gets inspection, class/method edit, test-run and Tonel-export tools. `permissions.allowImageEvaluate` (off) brings the **residual risk** back: then use a dedicated OS user or machine. `permissions.allowPharoTools` adds tool names, `denyPharoTools` removes some. The agent, PLexus and the image run with an allowlisted environment (no cloud/registry/database credentials). |
 | Agent modifies CI, the dispatcher config, or pushes to protected branches | Dispatcher (not the agent) commits and pushes. Pushes only `inactivity/<login>/<n>-<slug>`, never `--force`, refuses if the branch equals the base/default branch. Post-run diff check against `forbiddenPaths` (default `.github/**`, `.inactivity.json`, `**/.git/**`, `*.pem`, `.env*`) and size limits (default 200 files, 5 MB) -> `failed(policy-violation)`, nothing pushed. Deny rules also given to the agent for `Edit/Write(.github/**)`. |
@@ -183,6 +185,8 @@ S/logs/tick.log             scheduler stdout/stderr (rotated at 5 MB, keep 3)
   "properties": {
     "version": { "const": 1 },
     "login": { "type": ["string", "null"], "description": "GitHub login; null = discovered with viewer{login} and cached in state." },
+    "trustedAuthors": { "type": "array", "items": { "type": "string" }, "default": [], "description": "THIS member's own whitelist of GitHub logins (case-insensitive, '@' optional, a GitHub App as 'name[bot]'). Empty by default = nothing is claimed or executed. Stored normalized (lower case), de-duplicated, each entry validated against GitHub login syntax. Never shared, never in team.json. See 1.5 and 4.7." },
+    "allowPublicBoard": { "type": "boolean", "default": false, "description": "Tolerate a PUBLIC project board (doctor and `projects check` fail on one otherwise). A project entry may override it." },
     "projects": {
       "type": "array",
       "items": {
@@ -192,6 +196,7 @@ S/logs/tick.log             scheduler stdout/stderr (rotated at 5 MB, keep 3)
           "enabled": { "type": "boolean", "default": true },
           "owner": { "type": "string" },
           "ownerType": { "enum": ["organization", "user", null], "default": null },
+          "allowPublicBoard": { "type": "boolean", "description": "Overrides the global allowPublicBoard for this project." },
           "number": { "type": "integer", "minimum": 1 },
           "policy": {
             "type": "object", "required": ["repo"], "additionalProperties": false,
@@ -323,7 +328,7 @@ S/logs/tick.log             scheduler stdout/stderr (rotated at 5 MB, keep 3)
     "difficultyModel": { "type": "object", "default": { "easy": "haiku", "medium": "sonnet", "hard": "opus" } },
     "difficultyCost": { "type": "object", "default": { "easy": 1, "medium": 2, "hard": 4 }, "description": "Points consumed from a member's capacity." },
     "effort": { "type": "object", "default": { "haiku": "low", "sonnet": "medium", "opus": "high" } },
-    "trustedAssociations": { "type": "array", "items": { "enum": ["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR","FIRST_TIME_CONTRIBUTOR","FIRST_TIMER","MANNEQUIN","NONE"] }, "default": ["OWNER", "MEMBER", "COLLABORATOR"] },
+    "trustedAssociations": { "type": "array", "deprecated": true, "description": "DEPRECATED and ignored (a warning is reported). Trust is a per-member whitelist, config 'trustedAuthors' (4.2), not a shared team setting. The key is accepted so existing team.json files keep validating, and it is not part of the normalized team nor of the `cfg` digest." },
     "includePullRequests": { "type": "boolean", "default": false },
     "labelFallbacks": { "type": "boolean", "default": true },
     "maxClaimsPerMember": { "type": "integer", "minimum": 1, "maximum": 50, "default": 8 },
@@ -356,6 +361,8 @@ Policy version rule (so every client hashes the same bytes): the policy of cycle
 {
   "version": 1,
   "login": null,
+  "trustedAuthors": ["alice", "bob"],
+  "allowPublicBoard": false,
   "projects": [
     {
       "id": "evref-mcp",
@@ -418,6 +425,34 @@ Policy version rule (so every client hashes the same bytes): the policy of cycle
 ```
 Cycles older than 14 days are pruned on every write.
 
+### 4.6 Trusted authors (`trustedAuthors`, `src/trust.js`)
+
+The security-critical rule of the tool: **a member only claims and runs tasks written by people that member has vouched for.** Anyone able to create or edit a task on the board could otherwise prompt-inject another member's Claude (1.5).
+
+- **Where**: top-level `trustedAuthors` of the member's own `config.json` (4.2). Never in `team.json`, never in a comment, never in the `cfg` digest, never an input of `resolveCycle`.
+- **Default**: `[]`. Empty means nothing is claimed or executed; the tool says so wherever it would otherwise silently do nothing: `doctor` (`trusted-authors`, warn), `tick` (`noop` action with `detail.reason = "empty-trust-list"` and a hint, plus a log warning), `claim` (`skipped.reason = "empty-trust-list"`), `status` (`trust.warning`, `skippedUntrusted`), `trust list`.
+- **Entries**: GitHub logins, trimmed, leading `@` dropped, stored lower-case and de-duplicated, validated (`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`, no `--`, optional `[bot]` suffix); an invalid entry is a config error (`/trustedAuthors/<i>`). Compared case-insensitively.
+- **Actors**: `trust.actorKey(login, __typename)` is the comparison key: a human is `login`, a bot (`__typename: Bot`, or a `[bot]` login) is `login[bot]` and matches only an entry written with the suffix, so listing `foo` never trusts the bot `foo[bot]` and vice versa. A missing login (deleted account), a `Mannequin` or an `Organization` has no key and is never trusted. Being on the roster, `OWNER`/`MEMBER`/`COLLABORATOR` association, or owning the board grants nothing.
+- **Verdict** `trust.checkItemTrust(item, trustedAuthors)`: the author must be whitelisted; if the issue body was ever edited (`lastEditedAt`), its `editorLogin` must be whitelisted; if the title was ever changed (`titleEditedAt`), so must be `titleEditorLogin`. Reasons: `empty-trust-list`, `untrusted-author` (with `who` = `author|editor|title-editor`, and the login).
+- **Where it is applied (on the member's own machine, three gates)**: (1) `claims.buildClaims({..., trustedAuthors})` filters its candidates (an absent argument is an empty list); `tick` and `claim` also report the skipped tasks with author and editor. (2) An assignment arriving (5.6 step 0): verified again, `release(reason=untrusted-author)` otherwise. (3) The runner start gate (7.2 step 2) on a freshly fetched item, `--force` included, plus a second read after `start`.
+- **Data**: `BoardItem` carries `authorLogin`, `authorType`, `lastEditedAt`, `editorLogin`, `editorType`, `titleEditedAt`, `titleEditorLogin`, `titleEditorType` (9.3). GraphQL: `lastEditedAt`, `editor { login __typename }` and `titleEvents: timelineItems(last: 1, itemTypes: [RENAMED_TITLE_EVENT]) { nodes { ... on RenamedTitleEvent { createdAt actor { login __typename } } } }` on every item (shapes unverified against the live API, 12.1).
+- **Why resolution ignores it**: every member must compute the same assignment table from the same comments. A private filter inside `candidates`/`resolveCycle` would make tables diverge. Instead the filter is applied to *claims*: a task that member A does not trust is simply never claimed by A; if B trusts it and claims it, it is assigned to B (only claimants are assigned). A task nobody trusts has no claim and is `unassigned: no-claim`. The only cross-member effect is therefore the one the protocol already has.
+- **CLI**: `trust add|remove|list` (6.2).
+
+### 4.7 Board exposure checks and lockdown (`src/exposure.js`, `docs/board-lockdown.md`)
+
+Restricting the board to the members of the group is done by humans in the GitHub UI (private project, base role, team access, no outside collaborators, repo access or interaction limits, branch protection, 2FA, periodic review): `docs/board-lockdown.md` has the exact steps and is referenced from the README, `docs/security.md` and the setup skill. The tool only **checks** what GraphQL shows, in `projects check` and `doctor --online` (`board-exposure`):
+
+| Source | Finding | Level |
+| --- | --- | --- |
+| `ProjectV2.public` (read by `resolveProject`, re-read by `projectAccess`) | public board | **fail**, unless `allowPublicBoard === true` (project entry overrides the global key), then **warn** `board-public-allowed` |
+| same, flag absent | `board-visibility-unknown` | warn (never a silent pass) |
+| `Repository.isPrivate` / `visibility` of every allowlisted repo and of the policy repo (`repoInfo`) | public repo | warn `repo-public` |
+| `ProjectV2.teams`, `ProjectV2.repositories` (query `ProjectAccess`, best effort) | linked teams and repos | info; query refused or field missing: `board-access-unknown` with a hint, never an error (only auth errors propagate) |
+| direct collaborators, base role | not exposed by the GraphQL API (there is only an `updateProjectV2Collaborators` mutation) | always `unknown`, hint: read Project > Settings > Manage access |
+
+GraphQL exposes no privacy flag for the owning organization or user, so none is read. `tick` also logs a warning when it reads a public board that is not allowed. `projects check` exits 1 and `doctor` exits 3 on a failing finding.
+
 ---
 
 ## 5. Claim protocol
@@ -478,8 +513,9 @@ Per (member, task, round): sort claim/withdraw events by total order; `withdraw`
 Round 1 candidate items (sorted by `policy.sortCandidates`):
 1. issue-backed (PR only with `includePullRequests`), not archived, `state == OPEN`, no label `inactivity:skip`;
 2. Status == `statusValues.ready`, **or** Status == `claimed` and its latest valid `assign` has `cycle < C` and no valid `start` after it (stale);
-3. `authorAssociation` in `trustedAssociations` or author on roster;
-4. no valid `start|done` event of cycle `C`.
+3. no valid `start|done` event of cycle `C`.
+
+**Trust is deliberately not a candidate condition.** `candidates` and `resolveCycle` are pure functions of `(team, cycle, items, now, history)` that every member computes identically; a member's private whitelist (1.5) must not be an input. The whitelist filters what *a member* claims (`buildClaims`) and runs (5.6.3, 7.2), so a task whose author nobody trusts receives no claim and shows up unassigned (`no-claim`); a task one member trusts is claimed by that member alone and assigned to them.
 
 Round 2 candidates = tasks with no valid `start|done` in cycle `C` that were, in round 1: unassigned; or assigned and the assignee posted `release`; or assigned and no valid `start` by assignee at `startDeadline`. `excluded[task]` = the previous assignee in the latter two cases (they cannot win it in round 2).
 
@@ -508,7 +544,8 @@ Properties MUST hold and are property-tested: (P1) output independent of input c
 `resolveCycle` returns `{cycle, cfg, rounds: {1: RoundResult, 2: RoundResult|null}, final: {task -> {member, model, round, points}}}`; a task released/stale in round 1 and assigned in round 2 appears in `final` with round 2. `RoundResult = {round, assignments[], unassigned[{task, reason}], loads, inputsDigest, rejected[{commentId, reason}], ready:boolean}` with `ready=false` when `now < resolveAt` (caller passes `now`).
 
 ### 5.6 After resolution (what each client does for ITS OWN tasks)
-1. For each task assigned to me and not yet `assign`-posted: post `assign` (idempotent: skip if I already have a valid `assign` for `(cycle, round, task)`), set Status = `claimed`, Agent = `@login` (best effort).
+0. **Trust re-check (gate 2 of 3).** For each task assigned to me and not yet `assign`-posted, verify the task again against *my* `trustedAuthors` (author, last editor, last renamer, see 1.5): if it fails, post `release(reason=untrusted-author)` instead of `assign`, do not touch Status, and record `outcome=released` locally (not retried). `resolve --post-assign` skips such tasks and lists them in `assignSkipped`.
+1. For each remaining task assigned to me and not yet `assign`-posted: post `assign` (idempotent: skip if I already have a valid `assign` for `(cycle, round, task)`), set Status = `claimed`, Agent = `@login` (best effort).
 2. Compare any foreign `assign` for the same `(cycle, round, task)` that names a different member than my recomputation: log `divergence`, keep my computation (comments are inputs; recomputation is authoritative). `inputs`/`claims` of a foreign snapshot that list a claim id I cannot see yield warning `claim-disappeared`.
 3. **Execution lock**: before starting a task, re-fetch the item and require: (a) my recomputation (with fresh comments) still assigns it to me; (b) no valid `start` for the task in this cycle by another member that still holds the lock (a `start` followed, by comment order, by a `release` of the same member no longer holds it: `claims.earliestStart`; a `failed` alone does not release, infrastructure failures post `failed` + `release`); (c) if a round-2 `assign` names someone else, abort. Then post `start`. If after posting, an *earlier* valid `start` (by `(createdAt, databaseId)`) by another member exists, post `release(reason=lost-lock)`, do not run. The earliest valid `start` that still holds the lock is the final authority. In round 2, a task whose only `start` before the cutoff was released is a candidate again.
 4. After a run: `done` or `failed`/`release` as in 7.6.
@@ -551,14 +588,15 @@ JSON envelope: success `{"ok":true,"command":"<name>", ...}`; failure `{"ok":fal
 | `init [--force]` | Create config dir and `config.json` (defaults, no projects) and state dir. Refuses to overwrite without `--force`. `{ok, configPath, statePath}`. |
 | `config path\|show\|validate\|set <dotted.key> <json-value>` | `show` prints normalized config; `validate` -> `{ok, errors:[{path,message}]}`; `set` edits and re-validates (atomic write). |
 | `projects add --owner <o> --number <n> [--id <id>] [--owner-type organization\|user] (--policy-repo <o/r> [--policy-path <p>] \| --team-file <file>) [--repo <o/r>[=<cloneUrl>]]...` | Adds a subscription. Offline. `--team-file` inlines a team policy (single member). |
-| `projects list` / `projects remove <id>` / `projects check <id>` | `check` (online) resolves the project, prints fields/options, checks required field names and option names, counts items by contentType (`draft-issue` listed as skipped), loads the team policy for today, checks roster contains me. |
+| `projects list` / `projects remove <id>` / `projects check <id>` | `check` (online) resolves the project, prints fields/options, checks required field names and option names, counts items by contentType (`draft-issue` listed as skipped), loads the team policy for today, checks roster contains me, and reports the board exposure (4.7): a PUBLIC board is a problem (exit 1) unless `allowPublicBoard`; public repos warn; linked teams are listed, collaborators are `unknown`. It also reports my trusted authors and says when the list is empty. |
+| `trust add <login>... \| remove <login>... \| list` | **Manage MY whitelist** (`trustedAuthors`, 1.5, 4.2): logins are trimmed, `@` dropped, lower-cased and validated against GitHub login syntax (usage error, exit 2, otherwise); `add` is idempotent and warns when a `[bot]` is added; `remove` reports `notFound`; removing the last entry warns that nothing will run. `list` warns while empty. Offline, edits only the raw config (atomic, validated), honours `--dry-run` and `--json`. Output `{ok, action, added?, removed?, alreadyTrusted?, notFound?, trustedAuthors, saved, warning?}`. |
 | `team init [--out <file>] [--timezone <tz>] [--member <login>]...` | Prints/writes a starter `team.json` (all defaults explicit). `team show` prints the policy version in effect for today + digest; `team check <file>` validates a file. |
 | `doctor [--online] [--skip-pharo] [--smoke-claude]` | See 6.3. |
 | `tick` | The only thing the OS scheduler calls; see section 8. `{ok, now, skipped?:"locked"\|"paused"\|"idle"\|"limit"\|"inactive-day", projects:[{id, cycle, rounds:{"1":state,"2":state}, actions:[{type, task?, round?, detail?}], errors:[]}]}`. `type` in `claim\|withdraw\|resolve\|assign\|release\|run\|janitor\|noop`. |
-| `claim [--round 1\|2] [--cycle <date>] [--force-window]` | Post this member's claims now if the round is open (or `--force-window` for dry-run what-ifs). Output lists posted `{task, rank, commentUrl}` and skipped `{task, reason}`. |
+| `claim [--round 1\|2] [--cycle <date>] [--force-window]` | Post this member's claims now if the round is open (or `--force-window` for dry-run what-ifs). Output lists posted `{task, rank, commentUrl}` and skipped `{task, reason}`; tasks skipped by the whitelist have reason `untrusted-author` (with `author`, `editor`), and an empty whitelist yields `empty-trust-list` with a hint. |
 | `resolve [--round 1\|2] [--cycle <date>] [--post-assign]` | Recompute and print the table `{cycle, rounds, final, rejected, warnings}`; with `--post-assign` also does 5.6 step 1 for my tasks. Read-only otherwise. |
 | `run [--item <owner/repo#n>] [--model <alias\|id>] [--no-pr] [--keep]` | Execute one task now (the next of mine if `--item` omitted). `--item` on a task not assigned to me requires `--dry-run` or `--force` (a manual override that posts a normal `start` and bypasses claim checks; for development). `{ok, runId, outcome, reason?, pr?, branch?, costUsd?, numTurns?, runDir}`. `--keep` keeps worktree and image. |
-| `status [--cycle <date>] [--runs <n>]` | Board snapshot: per project: phases, my offer, candidates, resolution table, my assigned tasks and states, last runs from ledger, limit state, scheduler state, skipped items with reasons. |
+| `status [--cycle <date>] [--runs <n>]` | Board snapshot: per project: phases, my offer, candidates (those I would claim), `skippedUntrusted` (tasks skipped by my whitelist: task, reason, author, editor), resolution table, my assigned tasks and states, last runs from ledger, limit state, scheduler state, skipped items with reasons; top level `trust` (my list, warning when empty). |
 | `pause [--until <ISO\|YYYY-MM-DD>] [--for <duration e.g. 3d>]` / `resume` | Sets/clears `availability.paused[Until]` in config. `pause` also withdraws open-window claims and releases unstarted assignments on the next tick. |
 | `schedule install [--interval <min>] [--platform <p>] [--no-copy] [--yes]` / `schedule uninstall` / `schedule print [--platform <p>]` | `print` writes generated files/commands to stdout, nothing else; `install` executes them (unless `--dry-run`), see 8.4; `uninstall` removes files/units and the copied app. |
 | `warmup [--template <t>]` | For each distinct template in use (or `--template`), create+start+stop+delete a scratch image in scope `pd_warmup` so the first morning run does not download the template and build the PLexus base. |
@@ -570,6 +608,7 @@ JSON envelope: success `{"ok":true,"command":"<name>", ...}`; failure `{"ok":fal
 | `node` | fail | Node >= 22.12 |
 | `config` | fail | file exists and validates |
 | `projects` | fail | >= 1 enabled project; each has `policy` xor `team`; repos allowlist non-empty |
+| `trusted-authors` | warn | `trustedAuthors` is empty: nothing will ever be claimed or executed (fix: `inactivity trust add <login>`); `ok` lists the entries and notes GitHub Apps |
 | `timezone` | fail | `Intl` accepts the team/zone |
 | `git` | fail | `git --version` |
 | `claude-cli` | fail | `claude --version` >= 2.1.259 (needed for `--permission-prompts`), prints path |
@@ -579,6 +618,7 @@ JSON envelope: success `{"ok":true,"command":"<name>", ...}`; failure `{"ok":fal
 | `github-token` | fail | token resolvable (`GH_TOKEN`/`GITHUB_TOKEN`/`gh auth token`) |
 | `gh-cli` | info (`ok` with note) | informational: `gh` optional |
 | `github-viewer`, `github-scopes` | fail | `--online`: viewer login; classic PAT scopes include `repo` and `project` (`x-oauth-scopes` header; fine-grained tokens report `skip` + advice) |
+| `board-exposure` | fail / warn | `--online`, per project (4.7): **fail** when the ProjectV2 is public and `allowPublicBoard` is not `true` (warn when allowed); **warn** for public task/policy repos or an unreadable `public` flag; teams and linked repos are listed as notes, direct collaborators are `unknown` |
 | `projects-online` | fail | `--online`: each project resolvable, required fields/options present, policy loads, I am on the roster |
 | `npx` / `plexus` | fail | unless `--skip-pharo`: `<plexusCommand> image templates --scope pd_doctor` returns `{ok:true,...}` (proves npm access, Pharo Launcher and templates); the configured/default templates exist |
 | `pharo-launcher` | warn | macOS `/Applications/PharoLauncher.app`, Linux/Windows: detection skipped (plexus probe is authoritative) |
@@ -595,7 +635,7 @@ Global lock held (`ledger.acquireLock`), `state.limit.until` not in the future, 
 
 ### 7.2 Sequence (every step logs to `run.json`; cleanup always in `finally`)
 1. **Run record**: `runId`, directories, scope `pharo.scopeFor(repo, number, runId)`; register in `state.leaks`.
-2. **Start gate** (5.6.3): refresh item, check lock rules, post `start`, set Status `In progress` (best effort).
+2. **Start gate** (5.6.3): refresh item, check lock rules, then the **trust check (gate 3 of 3, never bypassed, `--force` included)**: author, last body editor and last title renamer must be on the member's `trustedAuthors` (1.5); on failure post `release(reason=untrusted-author)` and set Status back to `Todo` (not for a `--force` run on somebody else's task, which only aborts), end `released/untrusted-author`, run nothing. Then post `start`, set Status `In progress` (best effort), read the item again: an untrusted edit made in between ends `released/untrusted-author` after `failed`+`release`. The title and body used for the branch name, prompt, commit and PR are those of this verified read, never the stale copy of the tick.
 3. **Git**: `gitwork.ensureMirror` (`git clone --mirror <cloneUrl>` once, `git fetch --prune` after), `gitwork.createWorktree` at `S/work/<runId>` from `origin/<baseBranch>` on new branch `inactivity/<login>/<number>-<slug(title,40)>` (suffix `-2`, `-3` if the branch exists locally or on the remote). The worktree is outside any other project.
 4. **Project declaration**: read `.inactivity.json` (3.3) from the worktree; autodetect baseline if absent; failure -> `failed(pharo-env)`.
 5. **Pharo environment** (`pharo.js`): `plexus image create task --template <t> [--category <c>] --scope <scope>`; `plexus image start task --timeout <imageStartTimeoutSeconds> --scope <scope>`; `plexus image list --scope <scope>` -> endpoint `images[].endpoint.url` for name `task` (parse defensively: `images` array or single `image`); `mcpCall(endpoint, "image_evaluate", {code: <Metacello script>})` then `mcpCall(.., "image_evaluate", {code: "(Smalltalk globals includesKey: #BaselineOf<Name>) printString"})` must answer `true`. Script (golden-tested):
@@ -682,9 +722,9 @@ A task with 2 task-level `failed` comments in the last 7 days is not a candidate
    b. needsNetwork = any round 'open' w/o claims posted | any 'resolved' round not yet resolved locally | assigned tasks pending & executionOpen
       if !needsNetwork -> noop
    c. items = github.listItems(project)            (one paginated query; comments last 100); every item with `commentsComplete == false` is re-read with all its comment pages (`github.getItem`) before anything is computed. Items that cannot be completed postpone the resolution to the next tick (claims/assigns/`done` are the oldest comments of a busy issue).
-   d. open round r and state.claimed[r] == null and offer(now) != null: claims = claims.buildClaims(...); post (skip ones already present by marker); sleep mutationDelayMs between posts; before every post compare the real clock with `claimEnd - (5 s + mutationDelayMs)` and stop (`claim-too-late`) when past it, and drop a claim whose returned `createdAt` is `>= claimEnd`; state.claimed[r] is set only if at least one claim made it into the window. The jitter is capped so that it ends well before the window; `at` is re-read per project.
+   d. open round r and state.claimed[r] == null and offer(now) != null: candidates are filtered by MY trustedAuthors (4.6; empty list: `noop` `empty-trust-list`, nothing posted); claims = claims.buildClaims(..., trustedAuthors); post (skip ones already present by marker); sleep mutationDelayMs between posts; before every post compare the real clock with `claimEnd - (5 s + mutationDelayMs)` and stop (`claim-too-late`) when past it, and drop a claim whose returned `createdAt` is `>= claimEnd`; state.claimed[r] is set only if at least one claim made it into the window. The jitter is capped so that it ends well before the window; `at` is re-read per project.
       if paused/offer null and I have open-window claims -> post withdraw.
-   e. for each round with state 'resolved': res = claims.resolveCycle(...); state.resolved[r]; for my tasks: step 5.6.1 (assign comments, Status, Agent), state.assigned[task]
+   e. for each round with state 'resolved': res = claims.resolveCycle(...); state.resolved[r]; for my tasks: step 5.6.0 (trust re-check, release `untrusted-author`) then 5.6.1 (assign comments, Status, Agent), state.assigned[task]
    e'. crash recovery (before claiming): an assignment with `startedAt` and no outcome has no live run (the tick holds the global lock): adopt a `done`/`release`/`failed` of mine already on the board; with a `start` and nothing else post `failed(reason=crashed)` + `release(reason=crashed)`, Status back to Todo, budget refunded; with no `start` at all clear `startedAt` so the task runs again.
    f. if executionOpen and not limited and caps allow: for up to maxTasksPerRun tasks of mine without start (ordered by round, then candidate order): runner.runTask(...); update state; on `limit` outcome: release the rest, set state.limit, break.
    g. janitor once per cycle (first tick): cleanup leaks older than 6 h.
@@ -781,14 +821,21 @@ Groupable into 4 agents: (WP1+WP2), (WP3), (WP4+WP5), (WP6+WP7). WP1's `util.js`
  * @property {'Issue'|'PullRequest'} contentType
  * @property {'OPEN'|'CLOSED'|'MERGED'} state
  * @property {string|null} authorLogin
- * @property {string} authorAssociation
+ * @property {string|null} authorType        GraphQL __typename (User, Bot, Mannequin, ...)
+ * @property {string} authorAssociation      informational only: it never grants trust (4.6)
+ * @property {string|null} lastEditedAt      last edit of the body, null when never edited
+ * @property {string|null} editorLogin
+ * @property {string|null} editorType
+ * @property {string|null} titleEditedAt     last rename, null when never renamed
+ * @property {string|null} titleEditorLogin
+ * @property {string|null} titleEditorType
  * @property {string[]} labels
  * @property {{priority:string|null, difficulty:string|null, status:string|null, agent:string|null}} fields
  * @property {Comment[]} comments       newest 100, ascending
  * @property {boolean} commentsComplete false when totalCount > comments.length
  * @property {string} updatedAt
  */
-/** @typedef {{id:string, title:string, ownerType:'organization'|'user', fields:Record<string,{id:string, dataType:string, options?:Record<string,string>}>}} ProjectInfo */
+/** @typedef {{id:string, title:string, ownerType:'organization'|'user', public:boolean|null, closed:boolean|null, fields:Record<string,{id:string, dataType:string, options?:Record<string,string>}>}} ProjectInfo */
 /** @typedef {{capacity:number, models:Tier[]}} Offer */
 /** @typedef {{kind:string, payload:object, member:string, task:string, round:1|2, createdAt:string, databaseId:number, commentId:string}} ClaimEvent */
 /** @typedef {{task:string, member:string, model:Tier, difficulty:Difficulty, points:number, rank:number}} Assignment */
@@ -834,7 +881,7 @@ export function defaultConfig()
 ```
 ### 9.7 `src/policy.js` (WP1)
 ```js
-export function validateTeam(obj)                         // {ok, errors, team}   normalized, see 4.3
+export function validateTeam(obj)                         // {ok, errors, warnings, team}   normalized, see 4.3 (warnings: deprecated trustedAssociations)
 export function digestTeam(team)                          // 'sha256:...'
 export function cyclePhases(team, now)                    // CyclePhases
 export function cycleDateFor(team, instant)               // 'YYYY-MM-DD'
@@ -846,8 +893,8 @@ export function tierFor(difficulty, team)                 // Tier
 export function sortCandidates(items, team)               // new array, total order 5.4
 export function buildOffer({config, team, login, now, state, round}) // Offer|null  (null: paused, day off, limit, no capacity)
 export function modelArgs({difficulty, team, config})     // {tier, model, effort, timeoutMs, maxTurns, maxBudgetUsd|null}
-export function isTrustedAuthor(item, team)               // boolean
 ```
+There is no `isTrustedAuthor(item, team)` any more: trust is a per-member filter in `src/trust.js` (4.6), not part of the shared team policy.
 `buildOffer`: `capacity = floor(dailyPoints * headroomFactor) - pointsUsedToday`, clamped to `roster.maxCapacity` and by `maxTasksPerDay - tasksStarted` (`capacity` additionally capped to `remainingTasks * maxCost`); models = `availability.models ∩ roster.models`; null when `capacity < 1`. `hardDifficultyAllowed=false` is enforced by `claims.buildClaims` (hard tasks are never claimed), not by the offer.
 
 ### 9.8 `src/claims.js` (WP2, pure; no I/O)
@@ -857,10 +904,10 @@ export function renderComment(payload, {team, text?})            // full body: h
 export function formatMarker(payload)                            // '<!-- inactivity:v1 {...} -->'
 export function parseComment(comment, item)                      // {ok:true, payload} | {ok:false, reason}
 export function collectEvents({items, team, cycle, cfg})         // {events: ClaimEvent[], rejected:[{commentId, reason}]}
-export function candidates({items, team, cycle, round, events, previous?}) // BoardItem[] (+ excluded map): {items, excluded: Record<task,string[]>}
+export function candidates({items, team, cycle, round, events, previous?}) // {items, excluded: Record<task,string[]>}; NO trust input (4.6): identical for every member
 export function computeHistory({items, team, cycle, cfg})        // Record<lowerLogin, points>
 export function resolveCycle({team, cycle, items, now, history?}) // {cycle, cfg, rounds:{1,2}, final:Record<task,{member,model,round,points}>, warnings:[]}
-export function buildClaims({team, cycle, round, login, offer, candidates, repoAllowlist, existing}) // payload[] to post (ranked, capped, skipping already-posted)
+export function buildClaims({team, cycle, round, login, offer, candidates, repoAllowlist, existing, trustedAuthors}) // payload[] to post (ranked, capped, skipping already-posted); candidates whose author/editor is not in MY trustedAuthors are dropped, absent = empty = nothing is claimed (4.6)
 export function buildAssign({team, cycle, round, login, assignment, claims, inputs, runId})
 export function buildLifecycle({kind, team, cycle, round, login, task, runId, extra})  // start|done|failed|release|withdraw payload
 export function ownAssignments(resolution, login)                // Assignment[] in execution order (round, then candidate order)
@@ -876,14 +923,15 @@ export function createGithub(deps, {token, apiUrl?})    // client with:
 //   listItems(project, team)                       -> {items: BoardItem[], skipped:[{itemId, reason}]}    cursor loop in JS, `first:50`, comments `last:100`
 //   getItem(project, team, itemId)                 -> BoardItem   (fresh fields + all comment pages)
 //   readPolicyFile({repo, path, until})            -> {text, oid, committedDate}|null   (4.3 policy version rule)
-//   repoInfo(repo)                                 -> {id, defaultBranch, cloneUrl}
+//   repoInfo(repo)                                 -> {id, defaultBranch, cloneUrl, isPrivate, visibility}
+//   projectAccess(project)                         -> {public, teams|null, repositories|null, collaborators:'unknown', status:'ok'|'unknown', hint}  (best effort, 4.7)
 //   postComment(issueNodeId, body)                 -> Comment            (addComment mutation)
 //   setStatus(project, team, itemId, {status?, agent?})  -> void         (resolves field/option ids; unknown option -> DispatchError('unknown-option'))
 //   createPullRequest({repo, base, head, title, body, draft}) -> {url, number, nodeId}
 //   addLabels(repo, nodeId, names)                 -> string[] applied    (best effort, ignores unknown labels)
 export class GithubError extends DispatchError // code: auth|scope|not-found|rate-limit|graphql|network
 ```
-Every GraphQL document is **named** (`ViewerLogin`, `ResolveProjectOrg`, `ResolveProjectUser`, `ProjectItems`, `ProjectItem`, `IssueComments`, `PolicyCommit`, `PolicyBlob`, `RepoInfo`, `AddComment`, `UpdateItemSelect`, `UpdateItemText`, `CreatePullRequest`, `RepoLabels`, `AddLabels`) and sent as `{operationName, query, variables}` so fakes route by name. Queries/mutations follow research B (items query with `fieldValues(first:20)` fragments, `comments(last:100){totalCount ...}`, `ProjectV2` resolved via `organization` or `user`, owner type tried both ways when `ownerType` is null). Behaviours: check `errors` on every 200 response; 401 -> `auth`; `FORBIDDEN`/missing scope -> `scope`; 403/429 with `retry-after` or `x-ratelimit-remaining: 0` -> sleep and retry (<= 3), else `rate-limit`; 5xx -> retry 2 times. Items with content type other than Issue/PR (or PR when `includePullRequests` false), archived, or REDACTED go to `skipped` with reason `draft-issue|pull-request|archived|redacted`. Mutations (not used for dedupe) are sleep-spaced by the caller. Unverified GraphQL shapes (contract-tested, marked in fixtures): `addComment` payload, `createPullRequest` input, `ProjectV2Item.type/isArchived`, `repositoryOwner`, number-field mutation (unused), `history(until:, path:)`.
+Every GraphQL document is **named** (`ViewerLogin`, `ResolveProjectOrg`, `ResolveProjectUser`, `ProjectItems`, `ProjectItem`, `IssueComments`, `PolicyCommit`, `PolicyBlob`, `RepoInfo`, `ProjectAccess`, `AddComment`, `UpdateItemSelect`, `UpdateItemText`, `CreatePullRequest`, `RepoLabels`, `AddLabels`) and sent as `{operationName, query, variables}` so fakes route by name. Queries/mutations follow research B (items query with `fieldValues(first:20)` fragments, `comments(last:100){totalCount ...}`, `ProjectV2` resolved via `organization` or `user`, owner type tried both ways when `ownerType` is null). Behaviours: check `errors` on every 200 response; 401 -> `auth`; `FORBIDDEN`/missing scope -> `scope`; 403/429 with `retry-after` or `x-ratelimit-remaining: 0` -> sleep and retry (<= 3), else `rate-limit`; 5xx -> retry 2 times. Items with content type other than Issue/PR (or PR when `includePullRequests` false), archived, or REDACTED go to `skipped` with reason `draft-issue|pull-request|archived|redacted`. Mutations (not used for dedupe) are sleep-spaced by the caller. Unverified GraphQL shapes (contract-tested, marked in fixtures): `addComment` payload, `createPullRequest` input, `ProjectV2Item.type/isArchived`, `repositoryOwner`, number-field mutation (unused), `history(until:, path:)`.
 
 ### 9.10 `src/pharo.js` (WP4)
 ```js
@@ -1008,18 +1056,20 @@ Skill contents (all commands are `node "${CLAUDE_PLUGIN_ROOT}/bin/inactivity.js"
 | `time.test.js` | window math for Europe/Paris, America/New_York, Asia/Kolkata; **DST**: 2026-10-25 (fall back) and 2027-03-28 (spring forward), a window start inside the gap (02:30) and inside the overlap; weekday; addDays across month ends. |
 | `config.test.js` | defaults, every validation error path (JSON pointers), `INACTIVITY_HOME`/XDG/Windows path resolution, `setByPath`, atomic save. |
 | `policy.test.js` | validateTeam errors (window order, deadlines), digest stable across key order, `cyclePhases` at boundary instants (06:00:00, 09:59:59, 10:00:00, +grace), inactive day, round 2 off; `sortCandidates` total order; label fallbacks; `buildOffer` (headroom, caps, paused, limit); `modelArgs` table. |
-| `claims.test.js` | golden comment bodies; parse accept/reject matrix (quote reply, two markers, bad json, wrong member, wrong task, wrong cfg, bot, minimized, edited after window, outside window, claim cap); fold with withdraw/re-claim; candidates incl. stale `Claimed`; round 2 with release/stale/excluded; resolution examples (hand-checked tables); **properties** with a seeded PRNG (P1-P8, section 5.5); history fairness; digest equality across shuffles; two-member tie decided by hash and independent of login order. |
+| `claims.test.js` | trust regressions: empty or missing whitelist claims nothing, non-whitelisted author/editor never claimed, case-insensitivity, bots, **resolution unaffected by any whitelist** (two members with different lists, identical inputs digest and final table; a task nobody trusts gets no claim); golden comment bodies; parse accept/reject matrix (quote reply, two markers, bad json, wrong member, wrong task, wrong cfg, bot, minimized, edited after window, outside window, claim cap); fold with withdraw/re-claim; candidates incl. stale `Claimed`; round 2 with release/stale/excluded; resolution examples (hand-checked tables); **properties** with a seeded PRNG (P1-P8, section 5.5); history fairness; digest equality across shuffles; two-member tie decided by hash and independent of login order. |
 | `github.test.js` | per-operation fixture tests (`fixtures/gh-*.json`): viewer, project resolve (org then user fallback), items pagination (3 pages), comment pagination, skipped types, redaction, `errors` array handling, 401/403/429/5xx/retry-after, policy-at-commit, PR creation, label best effort, token resolution order (env, gh), token never in logs. |
 | `pharo.test.js` | `scopeFor` (no dash, <= 64, stable), plexus argv for every call (golden), `{ok:false}` mapping to codes, endpoint parsing variants, `mcpCall` against a real local `node:http` server fake speaking the JSON-RPC protocol (initialize, 202 for the notification, tools/call), baseline script golden (with and without group, path with spaces), verify pass/fail, dispose never throws and confirms via list. |
 | `claudeRun.test.js` | argv golden for easy/medium/hard (comma-joined lists, no `--bare`, stdin prompt), env filtering, `parseStream` with recorded fixtures (`fixtures/stream-*.jsonl`: success, limit session, limit weekly, 429 api_error_status, overloaded, auth failed, max_turns, budget, plugin/mcp error in init), junk lines, `parseResetTime`, result block extraction, timeout path with fake exec. |
 | `prompt.test.js` | untrusted wrapper escaping, truncation, HTML comment stripping, injection strings stay inside the block, PR body sanitisation. |
 | `gitwork.test.js` | against **real git** in temp dirs (git is present): mirror, worktree, branch naming collisions, diff gate (empty, forbidden path, oversize, symlink), commit author/trailer, push to a local bare repo as "remote", refusal to push base branch, `removeWorktree` refuses paths outside `work/`. |
 | `ledger.test.js` | lock acquisition/stale/dead pid, state atomicity and pruning, ledger append/read. |
-| `runner.test.js` | full `runTask` with fake exec (git real or faked per case), fake github and fake claude stream: success -> PR + comments + cleanup; each outcome row of 7.6; cleanup runs on every thrown step (fault injection at each of the 15 steps); no leak entries remain; dry-run performs nothing. |
+| `runner.test.js` | trust gate: empty whitelist, non-whitelisted author, bait-and-switch by a non-whitelisted editor or renamer, case-insensitive match, bot rules, `--force` never bypasses, edit between the two reads, prompt built from the verified item; full `runTask` with fake exec (git real or faked per case), fake github and fake claude stream: success -> PR + comments + cleanup; each outcome row of 7.6; cleanup runs on every thrown step (fault injection at each of the 15 steps); no leak entries remain; dry-run performs nothing. |
 | `tick.test.js` | `planProject` table; **end-to-end simulation**: 3 members (separate state dirs and fake clocks) against one `fakeGithub`; walk the clock 05:50 -> 20:00 in 10-min ticks; assert: claims posted once, identical resolution on all clients, each task run exactly once, round 2 takeover after a forced `limit`, a machine that misses the window executes only what it won, no network before 06:00 or when idle (assert zero fetch calls), paused member withdraws, lock contention, edited/deleted claim adversarial cases, DST day. |
 | `schedule.test.js` | golden files `test/golden/{launchd.plist,inactivity.service,inactivity.timer,crontab,schtasks.txt}`; paths with spaces; idempotent crontab replacement; install/uninstall command lists; copyApp. |
-| `cli.test.js` | every command in `commands` with `--json`, exit codes, usage errors, `--now` guard, `--dry-run` guarantees (assert zero mutating calls on the fakes), help text derived from the table. |
+| `cli.test.js` | every command in `commands` with `--json`, exit codes, usage errors, `--now` guard, `--dry-run` guarantees (assert zero mutating calls on the fakes), help text derived from the table; `trust add/remove/list` (validation, normalization, dry-run), doctor `trusted-authors` and `board-exposure`, `projects check` on public/private boards, `claim`/`resolve --post-assign`/`status`/`run` honouring the whitelist. |
 | `doctor.test.js` | each check id in ok/warn/fail variants. |
+| `trust.test.js` | login normalization and syntax, `actorKey` (bots, mannequins), case-insensitivity, empty list trusts nobody, author/editor/title-editor verdicts, `partitionByTrust`, config `trustedAuthors`/`allowPublicBoard` validation. |
+| `exposure.test.js` | public board fail / allowed warn, repo visibility, teams listed or `unknown` with hint, project override of `allowPublicBoard`; end to end with `gh-project-org-public`, `gh-project-access*`, `gh-repo-info-public` fixtures. |
 | `package.test.js` | `plugin.json`/`marketplace.json` invariants (name reserved prefixes, version string, plugin name equals marketplace entry, no extra files in `.claude-plugin`, skills have frontmatter name+description, `bin` executable bit, `files` list exists, no `dependencies` key in package.json); runs `claude plugin validate <root>` **only if `claude` is on PATH** (skipped otherwise, never network). |
 
 Fixtures are recorded shapes, hand-written where live data is unavailable, each with a header comment `// UNVERIFIED against live API` where applicable. A manual `scripts/record-contract.js` (not part of `npm test`) can re-record them with a real token.
@@ -1032,14 +1082,14 @@ Fixtures are recorded shapes, hand-written where live data is unavailable, each 
 1. PLexus CLI: global flags position (`--scope` after the subcommand is assumed), exact `image start`/`image list` JSON (endpoint under `images[].endpoint.url`), behaviour when `npx` has no network (first run).
 2. `image_evaluate` argument name `code` and answer shape (`content[0].text`, `isError`); whether Metacello `onConflictUseLoaded` and tonel local repositories behave on the pinned MCP (3.8.0) for the project's Pharo version; whether a failed load surfaces as `isError` (hence the post-load check expression).
 3. Claude Code: permission rule to allow a whole stdio MCP server (`mcp__pharo` vs `mcp__pharo__*`); whether `claude -p` with stdin prompt + `--output-format stream-json --verbose` emits `rate_limit_event` fields as assumed; exact exit code and result shape at usage-limit exhaustion; `--effort` accepted values per model; whether `--setting-sources user` also hides project-level CLAUDE.md (acceptable either way); `bin/` on PATH inside `-p`.
-4. GitHub GraphQL unverified shapes (9.9) and fine-grained PAT support for org Projects v2; `Issue.authorAssociation` availability on all items; GHES differences.
+4. GitHub GraphQL unverified shapes (9.9) and fine-grained PAT support for org Projects v2; `Issue.authorAssociation` availability on all items; GHES differences. Trust inputs (4.6): that `Issue.editor`/`lastEditedAt` reflect the last body editor and that `RenamedTitleEvent.actor` (via `timelineItems(itemTypes: [RENAMED_TITLE_EVENT])`) reflects the last renamer on both Issue and PullRequest; `ProjectV2.public`, `ProjectV2.teams` and `ProjectV2.repositories` readable with the member's token (otherwise `unknown`, 4.7).
 5. Quota semantics: the subscription limit is per account but shared with the member's interactive usage; there is no API to read remaining quota, so a morning run can still hit the limit. `maxBudgetUsd` is an API-equivalent estimate, not a subscription quota.
 6. macOS LaunchAgent and the login keychain while the screen is locked / FileVault pre-login; Claude auth for the agent when the user is not logged in graphically (then `claude setup-token` + `CLAUDE_CODE_OAUTH_TOKEN` in the scheduler env; not stored by the plugin: documented as a manual step).
 7. Window semantic when a team spans time zones: single `timezone` per team (beta).
 8. Owner/org naming for the marketplace and homepage (placeholders until decided).
 
 ### 12.2 Risks
-- **Pharo `image_evaluate` is arbitrary code execution** (1.5): trust boundary is the issue author gate + human Status; recommend dedicated account/VM for teams; `image_evaluate` is denied by default; `permissions.allowImageEvaluate` is an explicit opt-in.
+- **Pharo `image_evaluate` is arbitrary code execution** (1.5): trust boundary is each member's trusted-authors whitelist (4.6) + human Status; recommend dedicated account/VM for teams; `image_evaluate` is denied by default; `permissions.allowImageEvaluate` is an explicit opt-in.
 - Prompt injection can still steer code changes inside the allowed paths; the PR is draft and human-reviewed, nothing merges automatically.
 - Double execution if two clients' views diverge (deleted/edited comments): mitigated by the earliest-`start` lock and by `assign` snapshots; residual possibility of duplicate PRs is accepted in beta.
 - Image start cost: first run per template builds a PLexus base (minutes); `warmup` mitigates. Disk growth bounded by per-run delete + janitor. RAM per Pharo VM is unmeasured.
@@ -1056,5 +1106,6 @@ Fixtures are recorded shapes, hand-written where live data is unavailable, each 
 - [ ] One full dry run (`tick --dry-run --now`) and one real end-to-end run on a sandbox repo: claim -> resolve -> assign -> run -> draft PR -> cleanup, with `plexus image list` and `S/work` empty afterwards.
 - [ ] Two-account simulation (two `INACTIVITY_HOME`s, two `CLAUDE_CONFIG_DIR`s) resolving identically, including a forced limit and round-2 takeover.
 - [ ] Scheduler installed and fired on macOS (launchd) and Linux (systemd user timer); catch-up after sleep observed; `schedule uninstall` leaves nothing.
-- [ ] Threat-model items verified: no token in any log/comment/ledger (grep test), agent cannot run `git push` or curl (denied under `dontAsk`), forbidden-path edits rejected, non-trusted issue author skipped.
+- [ ] Threat-model items verified: no token in any log/comment/ledger (grep test), agent cannot run `git push` or curl (denied under `dontAsk`), forbidden-path edits rejected, empty whitelist claims nothing, non-whitelisted issue author or editor skipped at all three gates.
+- [ ] Board lockdown applied by a human following `docs/board-lockdown.md` (private project, group-only access, branch protection, 2FA); `projects check` and `doctor --online` green.
 - [ ] README documents: setup, board conventions, team.json, security model and its residual risk, uninstall, troubleshooting (`doctor` ids).

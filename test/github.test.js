@@ -259,7 +259,7 @@ test('readPolicyFile: no commit or no blob gives null; unknown repo is not-found
 
 test('repoInfo and createPullRequest', async () => {
   const { github, calls } = gh({ routes: { RepoInfo: fixture('gh-repo-info'), CreatePullRequest: fixture('gh-create-pr') } })
-  assert.deepEqual(await github.repoInfo('acme/app'), { id: 'R_1', defaultBranch: 'main', cloneUrl: 'https://github.com/acme/app.git' })
+  assert.deepEqual(await github.repoInfo('acme/app'), { id: 'R_1', defaultBranch: 'main', cloneUrl: 'https://github.com/acme/app.git', isPrivate: true, visibility: 'PRIVATE' })
   const pr = await github.createPullRequest({ repo: 'acme/app', base: 'main', head: 'inactivity/alice/1-x', title: 'T', body: 'B', draft: true })
   assert.deepEqual(pr, { url: 'https://github.com/acme/app/pull/12', number: 12, nodeId: 'PR_1' })
   const v = calls.at(-1).body.variables
@@ -369,4 +369,82 @@ test('token never appears in error messages or logs', async () => {
 
 test('createGithub requires a token', () => {
   assert.throws(() => createGithub(makeDeps().deps, { token: '' }), { code: 'no-token' })
+})
+
+// --- trust inputs: author type, editor, title renames ------------------------
+
+test('items carry the author type, the last body editor and the last renamer (inputs of the trust whitelist)', async () => {
+  const { github, calls } = gh({ routes: { ProjectItem: fixture('gh-item-edited'), IssueComments: fixture('gh-comments-older') } })
+  const item = await github.getItem(PROJECT, TEAM, 'PVTI_7')
+  assert.equal(item.authorLogin, 'alice')
+  assert.equal(item.authorType, 'User')
+  assert.equal(item.lastEditedAt, '2026-11-18T11:00:00Z')
+  assert.equal(item.editorLogin, 'mallory')
+  assert.equal(item.editorType, 'User')
+  assert.equal(item.titleEditedAt, '2026-11-18T11:05:00Z')
+  assert.equal(item.titleEditorLogin, 'dependabot')
+  assert.equal(item.titleEditorType, 'Bot')
+  // the query really asks for them
+  const q = calls[0].body.query
+  assert.match(q, /editor \{ login __typename \}/)
+  assert.match(q, /lastEditedAt/)
+  assert.match(q, /RENAMED_TITLE_EVENT/)
+})
+
+test('an item that was never edited has null editor fields; a missing author stays null', async () => {
+  const { github } = gh({ routes: { ProjectItems: [fixture('gh-items-page1'), fixture('gh-items-page2'), fixture('gh-items-page3')] } })
+  const { items } = await github.listItems(PROJECT, TEAM)
+  for (const i of items) {
+    assert.equal(i.lastEditedAt, null)
+    assert.equal(i.editorLogin, null)
+    assert.equal(i.titleEditedAt, null)
+    assert.equal(i.titleEditorLogin, null)
+  }
+  assert.equal(items[0].authorType, 'User')
+})
+
+// --- board exposure: project visibility, repo visibility, teams -------------------
+
+test('resolveProject reads the public flag of the board', async () => {
+  let { github } = gh({ routes: { ResolveProjectOrg: fixture('gh-project-org') } })
+  let p = await github.resolveProject({ owner: 'acme', number: 3, ownerType: 'organization' })
+  assert.equal(p.public, false)
+  assert.equal(p.closed, false)
+  ;({ github } = gh({ routes: { ResolveProjectOrg: fixture('gh-project-org-public') } }))
+  p = await github.resolveProject({ owner: 'acme', number: 3, ownerType: 'organization' })
+  assert.equal(p.public, true)
+  // old fixture without the flag: unknown, not false
+  ;({ github } = gh({ routes: { ResolveProjectUser: fixture('gh-project-user') } }))
+  p = await github.resolveProject({ owner: 'alice', number: 1, ownerType: 'user' })
+  assert.equal(p.public, null)
+})
+
+test('projectAccess lists linked teams and repositories; collaborators are always unknown', async () => {
+  const { github, calls } = gh({ routes: { ProjectAccess: fixture('gh-project-access') } })
+  const a = await github.projectAccess({ ...PROJECT, public: false })
+  assert.equal(a.status, 'ok')
+  assert.equal(a.public, false)
+  assert.deepEqual(a.teams, [{ slug: 'core', name: 'Core team' }])
+  assert.deepEqual(a.repositories.map((r) => [r.repo, r.isPrivate]), [['acme/app', true], ['acme/docs', false]])
+  assert.equal(a.collaborators, 'unknown')
+  assert.match(a.hint, /Manage access/)
+  assert.deepEqual(calls[0].body.variables, { projectId: 'PVT_1' })
+})
+
+test('projectAccess degrades to unknown with a hint when the token cannot see it, but auth errors propagate', async () => {
+  let { github } = gh({ routes: { ProjectAccess: { errors: [{ type: 'FORBIDDEN', message: 'Resource not accessible by personal access token' }] } } })
+  const a = await github.projectAccess({ ...PROJECT, public: true })
+  assert.equal(a.status, 'unknown')
+  assert.equal(a.public, true, 'the public flag of resolveProject is kept')
+  assert.equal(a.teams, null)
+  assert.match(a.hint, /not visible with this token/)
+  ;({ github } = gh({ http: [response(401, { message: 'Bad credentials' })] }))
+  await assert.rejects(github.projectAccess(PROJECT), { code: 'auth' })
+})
+
+test('repoInfo exposes the repository visibility', async () => {
+  const { github } = gh({ routes: { RepoInfo: fixture('gh-repo-info-public') } })
+  const r = await github.repoInfo('acme/app')
+  assert.equal(r.isPrivate, false)
+  assert.equal(r.visibility, 'PUBLIC')
 })

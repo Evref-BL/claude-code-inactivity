@@ -15,7 +15,9 @@ inside Claude Code, or `node bin/inactivity.js` from a checkout.
 | Pharo Launcher + network for `npx` | PLexus creates the images | `npx`, `plexus`, `pharo-launcher` |
 
 Token: `gh auth login -s repo -s project`, or export a classic PAT as `GH_TOKEN`.
-Fine-grained tokens need Issues, Pull requests, Contents and Projects access.
+A classic PAT is the verified option and the only one for a user-owned project. A fine-grained token is
+narrower but has a single resource owner and is unverified for Projects v2: use it only if you have checked it
+works for your org project (it then needs Issues, Pull requests, Contents and Projects access).
 The `gh` CLI itself is optional. Never paste a token into a chat or a config file.
 
 ## 2. Config
@@ -57,7 +59,33 @@ Points: easy = 1, medium = 2, hard = 4 (team policy `difficultyCost`).
 machine: set `claude.configDir` (exported as `CLAUDE_CONFIG_DIR`) and use one
 `INACTIVITY_HOME` per account.
 
-## 3. Subscribe to a board
+## 3. Whom you trust (before anything can run)
+
+Anyone who can create or edit a task on the board could try to prompt-inject your
+Claude, so **you** decide whose tasks you accept. The list is yours (config key
+`trustedAuthors`), empty by default, never shared with the team, and nothing is
+claimed or executed while it is empty:
+
+```
+inactivity trust add alice bob          # GitHub logins (case-insensitive, @ optional)
+inactivity trust list
+inactivity trust remove bob
+```
+
+Add yourself if you write tasks you want your own machine to run. Being on the
+team roster, or an owner or member of the organization, grants nothing by itself.
+A GitHub App must be listed with its suffix (`dependabot[bot]`). The author and
+the last editor of an issue must both be on the list at run time. `doctor` warns
+while the list is empty, and `status` lists the tasks skipped as untrusted with
+their author.
+
+Also restrict the board to the members of the group: see
+[board-lockdown.md](board-lockdown.md) (private project, base role, team access,
+branch protection, 2FA, periodic review). `projects check` and `doctor --online`
+fail on a public board; `config set allowPublicBoard true` (or per project,
+`projects.<i>.allowPublicBoard`) accepts it knowingly.
+
+## 4. Subscribe to a board
 
 ```
 inactivity projects add --owner Evref-BL --number 3 \
@@ -80,7 +108,7 @@ day is the file at the last commit before that day's window start, so edits
 take effect from the next cycle. Fields and defaults are in
 [protocol.md](protocol.md) and the specification.
 
-## 4. Check, warm up, schedule
+## 5. Check, warm up, schedule
 
 ```
 inactivity doctor --online
@@ -105,7 +133,7 @@ cannot break the job; re-run it after updating the plugin (`doctor` id
   `CLAUDE_CODE_OAUTH_TOKEN` in the job environment yourself; the plugin never
   stores it.
 
-## 5. Day-to-day
+## 6. Day-to-day
 
 `status` shows what happened; `pause --for 3d` and `resume` control
 availability (open claims are withdrawn, unstarted assignments released on the

@@ -29,7 +29,8 @@ const mkItem = (n, o = {}) => {
   return {
     itemId: `PVTI_${repo}_${n}`, issueNodeId: `I_${repo}_${n}`, id: `${repo}#${n}`, repo, number: n,
     title: `Task ${n}`, body: '', url: `https://github.com/${repo}/issues/${n}`, contentType: o.contentType ?? 'Issue',
-    state: o.state ?? 'OPEN', authorLogin: 'maint', authorAssociation: o.authorAssociation ?? 'MEMBER',
+    state: o.state ?? 'OPEN', authorLogin: 'authorLogin' in o ? o.authorLogin : 'maint', authorType: 'User', authorAssociation: o.authorAssociation ?? 'MEMBER',
+    lastEditedAt: o.lastEditedAt ?? null, editorLogin: o.editorLogin ?? null, editorType: o.editorLogin ? 'User' : null, titleEditedAt: null, titleEditorLogin: null, titleEditorType: null,
     labels: o.labels ?? [],
     fields: { priority: o.priority ?? null, difficulty: o.difficulty ?? null, status: o.status ?? 'Todo', agent: null },
     comments: o.comments ?? [], commentsComplete: true, updatedAt: T('00:00'),
@@ -276,29 +277,28 @@ test('foldClaims: capacity and models are clamped to the roster ceilings', () =>
 // Candidates
 // ---------------------------------------------------------------------------
 
-test('candidates round 1: status, trust, labels, pull requests, closed issues, stale Claimed', () => {
+test('candidates round 1: status, labels, pull requests, closed issues, stale Claimed (trust is NOT an input)', () => {
   const team = mkTeam();
   const cfg = digestTeam(team);
   const items = [
     mkItem(1),
     mkItem(2, { status: 'In progress' }),
-    mkItem(3, { authorAssociation: 'NONE' }),
+    mkItem(3, { authorAssociation: 'NONE', authorLogin: 'stranger' }), // trust is per member and applied when claiming, not here
     mkItem(4, { labels: ['inactivity:skip'] }),
     mkItem(5, { contentType: 'PullRequest' }),
     mkItem(6, { state: 'CLOSED' }),
     mkItem(7, { status: 'Claimed' }), // stale: assigned yesterday, never started
     mkItem(8, { status: 'Claimed' }), // assigned yesterday and started
     mkItem(9, { status: 'Claimed' }), // claimed with no history at all
-    mkItem(10, { authorAssociation: 'NONE' }),
+    mkItem(10, { authorAssociation: 'NONE', authorLogin: 'bob' }),
   ];
-  items[9].authorLogin = 'bob'; // roster author passes the trust gate
   // stale Claimed on #7
   post(team, items[6], 'alice', T('10:30', '2026-11-18'), { kind: 'assign', cycle: '2026-11-18', model: 'sonnet' });
   // started Claimed on #8
   post(team, items[7], 'alice', T('10:30', '2026-11-18'), { kind: 'assign', cycle: '2026-11-18', model: 'sonnet' });
   post(team, items[7], 'alice', T('10:40', '2026-11-18'), { kind: 'start', cycle: '2026-11-18', model: 'sonnet' });
   const { items: got } = candidates({ items, team, cycle: CYCLE, round: 1, events: collectEvents({ items, team, cycle: CYCLE, cfg }).events });
-  assert.deepEqual(got.map((i) => i.number), [1, 7, 10]);
+  assert.deepEqual(got.map((i) => i.number), [1, 3, 7, 10]);
   // includePullRequests lets PRs in
   const team2 = mkTeam({ includePullRequests: true });
   const got2 = candidates({ items: [mkItem(5, { contentType: 'PullRequest' })], team: team2, cycle: CYCLE, round: 1 }).items;
@@ -633,7 +633,7 @@ test('buildClaims: ranked in candidate order, capped, allowlisted, feasible, ski
     mkItem(6, { priority: 'P3', difficulty: 'easy' }),
     mkItem(7, { priority: 'P3', difficulty: 'easy' }),
   ];
-  const args = { team, cycle: CYCLE, round: 1, login: 'Alice', offer: { capacity: 6, models: ['haiku', 'sonnet'] }, candidates: items, repoAllowlist: ['org/repo'], runId: 'run1', ts: T('06:10') };
+  const args = { team, cycle: CYCLE, round: 1, login: 'Alice', offer: { capacity: 6, models: ['haiku', 'sonnet'] }, candidates: items, repoAllowlist: ['org/repo'], trustedAuthors: ['maint'], runId: 'run1', ts: T('06:10') };
   const out = buildClaims(args);
   assert.deepEqual(out.map((p) => [p.task, p.rank]), [['org/repo#1', 1], ['org/repo#3', 2], ['org/repo#5', 3]]);
   assert.deepEqual(out[0], {
@@ -665,10 +665,10 @@ test('buildClaims: ranked in candidate order, capped, allowlisted, feasible, ski
 test('buildClaims: roster ceilings apply and non-roster logins claim nothing', () => {
   const team = mkTeam({ roster: [{ login: 'alice', maxCapacity: 2, models: ['haiku', 'sonnet'] }, { login: 'bob' }] });
   const items = [mkItem(1, { difficulty: 'medium' })];
-  const out = buildClaims({ team, cycle: CYCLE, round: 1, login: 'alice', offer: { capacity: 9, models: ['sonnet', 'opus'] }, candidates: items, repoAllowlist: { 'org/repo': {} } });
+  const out = buildClaims({ team, cycle: CYCLE, round: 1, login: 'alice', offer: { capacity: 9, models: ['sonnet', 'opus'] }, candidates: items, repoAllowlist: { 'org/repo': {} }, trustedAuthors: ['maint'] });
   assert.equal(out[0].capacity, 2);
   assert.deepEqual(out[0].models, ['sonnet']);
-  assert.deepEqual(buildClaims({ team, cycle: CYCLE, round: 1, login: 'mallory', offer: { capacity: 5, models: ['haiku'] }, candidates: items, repoAllowlist: ['org/repo'] }), []);
+  assert.deepEqual(buildClaims({ team, cycle: CYCLE, round: 1, login: 'mallory', offer: { capacity: 5, models: ['haiku'] }, candidates: items, repoAllowlist: ['org/repo'], trustedAuthors: ['maint'] }), []);
 });
 
 test('buildAssign / buildLifecycle: valid payloads, whitelisted extras, errors on bad input', () => {
@@ -898,4 +898,85 @@ test('property: round 2 results are also order independent', () => {
       if (prev) assert.notEqual(prev.member, a.member, `${a.task} went back to ${a.member}`);
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// Trust whitelist (docs/design.md 1.5): a per-member filter on what a member CLAIMS. It is not an input of resolution.
+// ---------------------------------------------------------------------------
+
+const claimArgs = (team, items, extra = {}) => ({
+  team, cycle: CYCLE, round: 1, login: 'alice', offer: { capacity: 8, models: ['haiku', 'sonnet', 'opus'] }, candidates: items,
+  repoAllowlist: ['org/repo'], runId: 'run1', ts: T('06:10'), ...extra,
+});
+
+test('trust: an empty or missing whitelist claims nothing (secure by default)', () => {
+  const team = mkTeam();
+  const items = [mkItem(1), mkItem(2, { authorLogin: 'alice' })];
+  assert.deepEqual(buildClaims(claimArgs(team, items)), []);
+  assert.deepEqual(buildClaims(claimArgs(team, items, { trustedAuthors: [] })), []);
+  assert.deepEqual(buildClaims(claimArgs(team, items, { trustedAuthors: undefined })), []);
+  // the old gates grant nothing any more: not the association, not the roster
+  assert.deepEqual(buildClaims(claimArgs(team, [mkItem(3, { authorAssociation: 'OWNER', authorLogin: 'bob' })])), []);
+});
+
+test('trust: only whitelisted authors are claimed, case-insensitively; bots and unknown accounts never by accident', () => {
+  const team = mkTeam();
+  const items = [
+    mkItem(1, { authorLogin: 'Maint' }),
+    mkItem(2, { authorLogin: 'stranger', authorAssociation: 'OWNER' }),
+    mkItem(3, { authorLogin: 'dependabot' }),
+    mkItem(4, { authorLogin: null }),
+    mkItem(5, { authorLogin: 'carol' }),
+  ];
+  items[2].authorType = 'Bot';
+  const claim = (list) => buildClaims(claimArgs(team, items, { trustedAuthors: list })).map((p) => p.task);
+  assert.deepEqual(claim(['MAINT']), ['org/repo#1']);
+  assert.deepEqual(claim(['@maint', 'Carol']), ['org/repo#1', 'org/repo#5']);
+  assert.deepEqual(claim(['maint', 'dependabot']), ['org/repo#1'], 'a bare name never trusts a bot');
+  assert.deepEqual(claim(['maint', 'dependabot[bot]']), ['org/repo#1', 'org/repo#3'], 'a bot only when listed with [bot]');
+});
+
+test('trust: an issue edited by a non-whitelisted editor is not claimed (bait and switch)', () => {
+  const team = mkTeam();
+  const items = [
+    mkItem(1, { lastEditedAt: T('05:00'), editorLogin: 'mallory' }),
+    mkItem(2, { lastEditedAt: T('05:00'), editorLogin: 'maint' }),
+    mkItem(3),
+  ];
+  const got = buildClaims(claimArgs(team, items, { trustedAuthors: ['maint'] })).map((p) => p.task);
+  assert.deepEqual(got, ['org/repo#2', 'org/repo#3']);
+  assert.deepEqual(buildClaims(claimArgs(team, items, { trustedAuthors: ['maint', 'mallory'] })).map((p) => p.task), ['org/repo#1', 'org/repo#2', 'org/repo#3']);
+});
+
+test('trust: resolution does not depend on any whitelist; two members with different lists agree on every input', () => {
+  const team = mkTeam();
+  const mine = mkItem(1, { priority: 'P0', difficulty: 'easy' }); // by maint
+  const theirs = mkItem(2, { priority: 'P1', difficulty: 'easy', authorLogin: 'stranger' }); // trusted by bob only
+  const nobody = mkItem(3, { priority: 'P2', difficulty: 'easy', authorLogin: 'spammer' }); // trusted by nobody
+  const items = [mine, theirs, nobody];
+  const cand = candidates({ items, team, cycle: CYCLE, round: 1 }).items;
+  assert.deepEqual(cand.map((i) => i.number), [1, 2, 3], 'candidate list is identical for everybody, it has no trust input');
+
+  const aliceClaims = buildClaims(claimArgs(team, cand, { login: 'alice', trustedAuthors: ['maint'] }));
+  const bobClaims = buildClaims(claimArgs(team, cand, { login: 'bob', trustedAuthors: ['maint', 'stranger'] }));
+  assert.deepEqual(aliceClaims.map((p) => p.task), ['org/repo#1']);
+  assert.deepEqual(bobClaims.map((p) => p.task), ['org/repo#1', 'org/repo#2']);
+  for (const p of aliceClaims) post(team, items.find((i) => i.id === p.task), 'alice', T('06:30'), p);
+  for (const p of bobClaims) post(team, items.find((i) => i.id === p.task), 'bob', T('06:31'), p);
+
+  // "machine A" (alice) and "machine B" (bob) run the same pure function on the same board
+  const a = resolveCycle({ team: clone(team), cycle: CYCLE, items: clone(items), now: NOW });
+  const b = resolveCycle({ team: clone(team), cycle: CYCLE, items: shuffled(mulberry32(3), items), now: NOW });
+  assert.deepEqual(a.final, b.final);
+  assert.equal(a.rounds[1].inputsDigest, b.rounds[1].inputsDigest);
+  // a hypothetical whitelist argument is ignored by the resolver
+  const c = resolveCycle({ team, cycle: CYCLE, items: clone(items), now: NOW, trustedAuthors: [] });
+  assert.deepEqual(c.final, a.final);
+  assert.equal(c.rounds[1].inputsDigest, a.rounds[1].inputsDigest);
+
+  assert.equal(a.final['org/repo#2'].member, 'bob', 'only bob trusts (and claimed) the stranger task');
+  assert.ok(['alice', 'bob'].includes(a.final['org/repo#1'].member));
+  assert.equal(a.final['org/repo#3'], undefined, 'a task nobody trusts gets no claim and no assignment');
+  assert.deepEqual(a.rounds[1].unassigned, [{ task: 'org/repo#3', reason: 'no-claim' }]);
+  assert.equal(ownAssignments(a, 'alice').some((x) => x.task === 'org/repo#2'), false);
 });

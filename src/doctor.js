@@ -1,7 +1,7 @@
 // `inactivity doctor`: environment checks (spec 6.3). Every check is
 // isolated: an exception inside one becomes a `fail` entry, never a crash.
 import { join } from "node:path";
-import { loadTeam, makeGithub, resolveLogin, rosterEntry } from "./context.js";
+import { checkExposure, loadTeam, makeGithub, resolveLogin, rosterEntry } from "./context.js";
 import { PRIVATE_FILE_MODE, ensurePrivateDir } from "./util.js";
 
 export const MIN_NODE = [22, 12, 0];
@@ -106,6 +106,19 @@ export async function runDoctor(deps, options = {}) {
     return problems.length ? failed("projects", problems.join("; "), { detail: problems }) : ok("projects", `${projects.length} enabled project(s)`);
   });
 
+  await add("trusted-authors", async () => {
+    if (!config) return skip("trusted-authors", "No config.");
+    const trust = await ctx.mod("trust");
+    const list = [...trust.trustSet(config.trustedAuthors)];
+    if (list.length === 0) {
+      return warn("trusted-authors", "No trusted author is configured: nothing will ever be claimed or executed on this machine (secure by default).", {
+        fix: "Run `inactivity trust add <github-login>...` with the logins whose tasks you accept (yourself, teammates you vouch for). It is your own list: it is never shared and the team roster does not imply trust.",
+      });
+    }
+    const bots = list.filter((l) => l.endsWith("[bot]"));
+    return ok("trusted-authors", `${list.length} trusted author(s): ${list.join(", ")}`, bots.length ? { bots, note: "GitHub Apps are on the list: every issue they open will be executed." } : undefined);
+  });
+
   await add("timezone", async () => {
     const time = await ctx.mod("time");
     const zones = projects.filter((p) => p.team?.timezone).map((p) => p.team.timezone);
@@ -202,9 +215,30 @@ export async function runDoctor(deps, options = {}) {
     await add("github-scopes", async () => {
       if (!github) return skip("github-scopes", "No GitHub client.");
       const scopes = await github.scopes();
-      if (scopes === null) return skip("github-scopes", "Fine-grained token: scopes are not reported.", { fix: "Make sure it grants Issues, Pull requests (write), Contents (write) and Projects (read and write) on the repos and the org." });
+      if (scopes === null) return skip("github-scopes", "Fine-grained token: scopes are not reported.", { fix: "Fine-grained tokens are unverified for Projects v2, have a single resource owner and cannot reach user-owned projects (use a classic PAT with repo + project there). If you keep it, make sure it grants Issues, Pull requests (write), Contents (write) and Projects (read and write) on the repos and the org, and that `projects check` works." });
       const missing = ["repo", "project"].filter((s) => !scopes.includes(s));
       return missing.length ? failed("github-scopes", `Missing scopes: ${missing.join(", ")}.`, { detail: scopes, fix: "gh auth refresh -s repo -s project (or create a new classic PAT)." }) : ok("github-scopes", scopes.join(", "));
+    });
+    await add("board-exposure", async () => {
+      if (!github) return skip("board-exposure", "No GitHub client.");
+      const problems = [];
+      const warnings = [];
+      const notes = [];
+      let fix;
+      for (const project of projects) {
+        try {
+          const info = await github.resolveProject({ owner: project.owner, number: project.number, ownerType: project.ownerType ?? undefined });
+          const report = await checkExposure(ctx, github, project, info);
+          for (const f of report.findings) {
+            if (f.level === "fail") { problems.push(`${project.id}: ${f.message}`); fix ??= f.fix; } else if (f.level === "warn") { warnings.push(`${project.id}: ${f.message}`); fix ??= f.fix; } else if (f.level === "info") notes.push(`${project.id}: ${f.message}`);
+          }
+        } catch (error) {
+          warnings.push(`${project.id}: exposure not checked (${/** @type {any} */ (error)?.message ?? error})`);
+        }
+      }
+      if (problems.length) return failed("board-exposure", problems.concat(warnings).join("; "), { detail: problems.concat(warnings), fix });
+      if (warnings.length) return warn("board-exposure", warnings.join("; "), { detail: warnings, fix });
+      return ok("board-exposure", `${projects.length} board(s) not public`, notes.length ? notes : undefined);
     });
     await add("projects-online", async () => {
       if (!github) return skip("projects-online", "No GitHub client.");

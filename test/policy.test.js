@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   validateTeam, digestTeam, cyclePhases, cycleDateFor, difficultyOf, priorityOf, priorityWeight, costOf,
-  tierFor, sortCandidates, buildOffer, modelArgs, isTrustedAuthor, usedToday,
+  tierFor, sortCandidates, buildOffer, modelArgs, usedToday, teamDefaults,
 } from '../src/policy.js';
+import * as policyModule from '../src/policy.js';
 import { defaultConfig, validateConfig } from '../src/config.js';
 
 const base = { v: 1, timezone: 'Europe/Paris', roster: [{ login: 'Alice' }, { login: 'bob', maxCapacity: 3, models: ['haiku', 'sonnet'] }] };
@@ -78,7 +79,7 @@ test('validateTeam: enums, tables and collisions', () => {
   assert.ok(errPaths({ ...base, fields: { priority: 'Status' } }).includes('/fields/status'));
   assert.ok(errPaths({ ...base, statusValues: { done: 'todo' } }).includes('/statusValues/done'));
   assert.ok(errPaths({ ...base, defaultDifficulty: 'trivial' }).includes('/defaultDifficulty'));
-  assert.ok(errPaths({ ...base, trustedAssociations: ['KING'] }).includes('/trustedAssociations/0'));
+  assert.ok(errPaths({ ...base, trustedAssociations: 'OWNER' }).includes('/trustedAssociations'));
   assert.ok(errPaths({ ...base, priorityWeights: { P0: 'x' } }).includes('/priorityWeights/P0'));
   assert.ok(errPaths({ ...base, cycleDays: [] }).includes('/cycleDays'));
   assert.ok(errPaths({ ...base, maxClaimsPerMember: 0 }).includes('/maxClaimsPerMember'));
@@ -220,13 +221,17 @@ test('sortCandidates: priority desc, repo asc (case-insensitive), number asc; in
   assert.deepEqual(rev.map((i) => `${i.id}:${i.fields.priority}`), out.map((i) => `${i.id}:${i.fields.priority}`));
 });
 
-test('isTrustedAuthor: association or roster', () => {
-  const t = mkTeam();
-  assert.equal(isTrustedAuthor(item({ authorAssociation: 'OWNER' }), t), true);
-  assert.equal(isTrustedAuthor(item({ authorAssociation: 'NONE', authorLogin: 'stranger' }), t), false);
-  assert.equal(isTrustedAuthor(item({ authorAssociation: 'NONE', authorLogin: 'ALICE' }), t), true);
-  assert.equal(isTrustedAuthor(item({ authorAssociation: 'CONTRIBUTOR', authorLogin: null }), t), false);
-  assert.equal(isTrustedAuthor(item({ authorAssociation: 'CONTRIBUTOR' }), mkTeam({ trustedAssociations: ['CONTRIBUTOR'] })), true);
+test('trustedAssociations is deprecated: accepted, ignored, warned about, and not part of the shared digest', () => {
+  const plain = validateTeam({ ...base });
+  const legacy = validateTeam({ ...base, trustedAssociations: ['OWNER', 'MEMBER', 'COLLABORATOR', 'WHATEVER'] });
+  assert.equal(legacy.ok, true);
+  assert.deepEqual(legacy.warnings.map((w) => w.path), ['/trustedAssociations']);
+  assert.match(legacy.warnings[0].message, /per-member whitelist/);
+  assert.deepEqual(plain.warnings, []);
+  assert.equal('trustedAssociations' in legacy.team, false);
+  assert.equal('trustedAssociations' in teamDefaults(), false);
+  assert.equal(digestTeam(legacy.team), digestTeam(plain.team), 'every member computes the same cfg whatever they keep in the file');
+  assert.equal('isTrustedAuthor' in policyModule, false, 'trust is no longer decided by the team policy');
 });
 
 const THU = at('2026-11-19T05:10:00Z');

@@ -13,6 +13,8 @@ import { sha256Hex, errorCode } from './util.js';
 import * as claimsMod from './claims.js';
 import * as policyMod from './policy.js';
 import * as runnerMod from './runner.js';
+import * as trustMod from './trust.js';
+import { allowsPublicBoard } from './exposure.js';
 
 const SIX_HOURS = 6 * 3600 * 1000;
 /** A claim is not posted within this margin (plus the mutation delay) of the end of its window. */
@@ -124,6 +126,7 @@ function createTickEnv(deps, { config, dryRun, state, stateDir }) {
     claims: deps.modules?.claims ?? claimsMod,
     policy: deps.modules?.policy ?? policyMod,
     runner: deps.modules?.runner ?? runnerMod,
+    trust: deps.modules?.trust ?? trustMod,
   };
   const ctx = {
     deps,
@@ -219,6 +222,9 @@ async function tickProject(env, project, entry, at) {
   const github = await env.getGithub();
   const login = await env.getLogin();
   const projectInfo = await github.resolveProject({ owner: project.owner, number: project.number, ownerType: project.ownerType ?? undefined });
+  if (projectInfo.public === true && !allowsPublicBoard(config, project)) {
+    deps.log?.warn?.(`tick: project board ${project.id} is PUBLIC: anyone can read it. Make it private (docs/board-lockdown.md) or set allowPublicBoard.`);
+  }
   const { items, skipped } = await github.listItems(projectInfo, team);
   if (skipped.length) entry.skipped = skipped.length;
   const incomplete = await completeComments({ deps, github, projectInfo, team, items, entry });
@@ -408,6 +414,17 @@ async function claimStage(stage, round) {
     ? mods.claims.resolveCycle({ team, cycle: plan.cycle, items, now: stage.deps.now(), history: mods.claims.computeHistory({ items, team, cycle: plan.cycle, cfg: stage.cfg }) }).rounds[1]
     : undefined;
   const cands = mods.claims.candidates({ items, team, cycle: plan.cycle, round, events, previous });
+  // Trust gate 1 of 3: only tasks written (and last edited) by people on MY whitelist are ever claimed.
+  const trust = mods.trust.partitionByTrust(cands.items, config.trustedAuthors);
+  if (trust.untrusted.length > 0) {
+    entry.untrusted = trust.untrusted.slice(0, 50).map((u) => ({ task: u.task, round, reason: u.reason, who: u.who, author: u.author, editor: u.editor }));
+    if (mods.trust.trustSet(config.trustedAuthors).size === 0) {
+      stage.deps.log?.warn?.(`tick: project ${project.id}: ${trust.untrusted.length} candidate task(s) but no trusted author is configured, so nothing is claimed. ${mods.trust.TRUST_HINT}`);
+      entry.actions.push({ type: 'noop', round, detail: { reason: 'empty-trust-list', hint: mods.trust.TRUST_HINT, tasks: trust.untrusted.length } });
+      return;
+    }
+    stage.deps.log?.info?.(`tick: project ${project.id}: ${trust.untrusted.length} candidate task(s) skipped, author not in trustedAuthors`);
+  }
   const payloads = mods.claims.buildClaims({
     team,
     cycle: plan.cycle,
@@ -419,11 +436,12 @@ async function claimStage(stage, round) {
     repoAllowlist: Object.keys(project.repos ?? {}),
     existing: myEvents(stage, events, round),
     hardDifficultyAllowed: config.availability?.hardDifficultyAllowed === true,
+    trustedAuthors: config.trustedAuthors,
     runId: stage.env.runId(),
     ts: stage.stamp(),
   });
   if (payloads.length === 0) {
-    entry.actions.push({ type: 'noop', round, detail: 'no-claimable-task' });
+    entry.actions.push({ type: 'noop', round, detail: trust.trusted.length === 0 && trust.untrusted.length > 0 ? { reason: 'untrusted-author', tasks: trust.untrusted.length } : 'no-claimable-task' });
     return;
   }
   const tasks = [];
@@ -454,7 +472,7 @@ async function claimStage(stage, round) {
 
 /** Resolve every newly resolved round, post `assign` for my tasks (5.6.1). */
 async function resolveStage(stage, rounds) {
-  const { mods, team, plan, cycleState, state, login, items, byId, github, projectInfo, entry, dryRun } = stage;
+  const { mods, config, team, plan, cycleState, state, login, items, byId, github, projectInfo, entry, dryRun } = stage;
   if (rounds.length === 0) return null;
   if (stage.incomplete?.size) {
     // Some comments could not be read: claims, assigns and `done` history may be missing. Never resolve on partial input.
@@ -476,6 +494,18 @@ async function resolveStage(stage, rounds) {
       if (!item) continue;
       const known = cycleState.assigned[a.task];
       if (known && known.round === r) continue;
+      // Trust gate 2 of 3: an assignment arrives, verify the task again against MY whitelist (it may have changed
+      // since I claimed, or the issue may have been edited). Not trusted: release it with a reason, run nothing.
+      const verdict = mods.trust.checkItemTrust(item, config.trustedAuthors);
+      if (!verdict.trusted) {
+        entry.actions.push({ type: 'release', task: a.task, round: r, detail: { reason: 'untrusted-author', who: verdict.who, login: verdict.login }, ...(dryRun ? { dryRun: true } : {}) });
+        if (!dryRun) {
+          const payload = mods.claims.buildLifecycle({ kind: 'release', team, cycle: plan.cycle, round: r, login, task: a.task, runId: stage.env.runId(), extra: { reason: 'untrusted-author' } });
+          await postEvent(stage, item, payload);
+          cycleState.assigned[a.task] = { round: r, model: a.model, difficulty: a.difficulty, points: a.points, assignPosted: false, startedAt: null, outcome: 'released', reason: 'untrusted-author', runId: null };
+        }
+        continue;
+      }
       const already = myEvents(stage, events, r).some((e) => e.kind === 'assign' && e.task === a.task);
       entry.actions.push({ type: 'assign', task: a.task, round: r, detail: { model: a.model, points: a.points }, ...(dryRun ? { dryRun: true } : {}) });
       if (!dryRun && !already) {

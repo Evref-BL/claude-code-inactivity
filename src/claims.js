@@ -4,7 +4,8 @@
 
 import { canonicalJson, sha256Hex, digest, compareStrings, DispatchError, sanitizeForComment, stripLinks } from './util.js';
 import { zonedToUtc, addDays, addMinutes, formatLocal } from './time.js';
-import { digestTeam, sortCandidates, difficultyOf, costOf, tierFor, isTrustedAuthor } from './policy.js';
+import { digestTeam, sortCandidates, difficultyOf, costOf, tierFor } from './policy.js';
+import { partitionByTrust } from './trust.js';
 
 export const MARKER_PREFIX = 'inactivity:v1';
 
@@ -421,11 +422,14 @@ function eventsByTask(events) {
   return map;
 }
 
-/** Issue-level conditions shared by both rounds. */
+/**
+ * Issue-level conditions shared by both rounds. Deliberately NOT a trust check: who may be believed is a
+ * per-member whitelist (trust.js) applied by each member to what THEY claim and run, never an input of the
+ * shared resolution (every member must compute the same table). A task nobody trusts gets no claim.
+ */
 function baseEligible(item, team, t, taskEvents) {
   if (item.contentType === 'PullRequest' && !t.includePullRequests) return false;
   if ((item.labels ?? []).includes(SKIP_LABEL)) return false;
-  if (!isTrustedAuthor(item, team)) return false;
   // a closed issue stays in the picture when this cycle's protocol already touched it (stable recomputation)
   const touched = taskEvents.some((ev) => ev.kind === 'start' || ev.kind === 'done');
   if (item.state !== 'OPEN' && !touched) return false;
@@ -750,12 +754,17 @@ function checked(payload) {
  * Claim payloads to post: ranked in candidate order, capped, repo-allowlisted, model/cost-feasible,
  * skipping tasks I already claimed. Hard tasks are never claimed unless `hardDifficultyAllowed` is true
  * (given as an argument or on the offer).
+ *
+ * Trust gate 1 of 3 (docs/design.md 1.5): a task whose issue author (or last editor) is not in MY
+ * `trustedAuthors` is never claimed. Secure by default: without `trustedAuthors` (or with an empty list)
+ * nothing is claimed. The whitelist is member-private and is not an input of `resolveCycle`.
  * @param {{team:object, cycle:string, round:1|2, login:string, offer:{capacity:number,models:string[]}|null,
  *   candidates:BoardItem[], repoAllowlist:string[]|Record<string,unknown>, existing?:Array<ClaimEvent|object>,
- *   hardDifficultyAllowed?:boolean, runId?:string, ts?:string}} args
+ *   hardDifficultyAllowed?:boolean, trustedAuthors?:string[], runId?:string, ts?:string}} args
  */
-export function buildClaims({ team, cycle, round, login, offer, candidates: cand, repoAllowlist, existing = [], hardDifficultyAllowed, runId, ts }) {
+export function buildClaims({ team, cycle, round, login, offer, candidates: cand, repoAllowlist, existing = [], hardDifficultyAllowed, trustedAuthors, runId, ts }) {
   if (!offer || !isInt(offer.capacity) || offer.capacity < 1) return [];
+  cand = partitionByTrust(cand, trustedAuthors).trusted;
   const t = teamDefaults(team);
   const me = lc(login);
   const roster = rosterMap(team).get(me);

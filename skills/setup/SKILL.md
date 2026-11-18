@@ -29,7 +29,11 @@ creates it, not you:
 
 - with the GitHub CLI: `gh auth login -s repo -s project`, or
 - a classic personal access token with scopes `repo` and `project`, exported as
-  `GH_TOKEN` in their shell profile (and in the scheduler environment, see step 8).
+  `GH_TOKEN` in their shell profile (and in the scheduler environment, see step 10).
+  The classic token is the verified choice and the only one that reaches a user-owned
+  project. A fine-grained token has one resource owner and Projects v2 support is
+  unverified: suggest it only if the user has confirmed it works for their org project
+  (see `docs/board-lockdown.md`, step 4).
 
 `gh` itself is optional.
 
@@ -42,7 +46,7 @@ runs use a throw-away worktree and image per task (see "Relationship to
 pharo-agent" in the README). Do not run `pharo-agent init` inside task
 checkouts.
 
-If Pharo Launcher is missing (step 7 reports `pharo-launcher`), help the user
+If Pharo Launcher is missing (step 9 reports `pharo-launcher`), help the user
 install it, per OS, or point them to the pharo-agent setup skill that installs
 the launcher and a first image:
 
@@ -66,7 +70,39 @@ for `--force`. Then ask for their daily budget and set it with
 Points: easy = 1, medium = 2, hard = 4 by default. Also set
 `pharo.defaultTemplate` to a template name that `plexus image templates` prints.
 
-## 5. Subscribe to the board
+## 5. Whom to trust (security-critical)
+
+Anyone who can create or edit a task on the board could prompt-inject this
+user's Claude, so the user keeps their OWN whitelist of trusted GitHub logins.
+It is empty by default and **nothing is claimed or executed until it is filled**
+(`doctor` warns about it). Explain this, then **ask the user** which GitHub
+logins to trust (typically themselves and the teammates they would hand their
+keyboard to). Add exactly the logins they name:
+
+```
+trust add <login> [<login> ...]
+trust list
+```
+
+Rules for you: never add a login the user did not say; never infer logins from
+the issue authors, the board owner, the organization members or the team roster
+(none of them implies trust, say so if the user asks why); never add a bot unless
+the user explicitly asks (`dependabot[bot]` form). The author **and the last
+editor** of every task must be on the list at run time. The list is personal and
+local: it is not written to `team.json` and not shared.
+
+## 6. Lock the board down (humans, in GitHub)
+
+The board must only be readable and writable by the members of the group.
+GitHub's settings are changed by the user in the GitHub UI, not by you: point
+them to `docs/board-lockdown.md` (private project, base role No access or Read,
+the group's team with Write, no outside collaborators, repo access and interaction
+limits, branch protection so the bot's draft PRs need a review, 2FA, a monthly
+access review) and go through its steps with them. Do not claim it is done until
+`projects check <id>` (step 8) no longer fails on a public board; the API cannot
+list the board's direct collaborators, so ask the user to confirm that step by eye.
+
+## 7. Subscribe to the board
 
 Ask for the organization (or user), the Projects v2 number, the repos that hold
 the tasks, and where the shared team policy lives. Then:
@@ -82,13 +118,17 @@ the policy repo. A single-member setup can use `--team-file <file>` instead of
 `--policy-repo`. Each task repo needs a `.inactivity.json` (see the
 board-guide skill and docs/board.md).
 
-## 6. Online check
+## 8. Online check
 
 Run `doctor --online --skip-pharo` and `projects check <id>`. Fix missing
-fields, option names or roster membership. Items that are draft issues are
+fields, option names or roster membership. A `board-exposure` failure means the
+project board is PUBLIC: have the user make it private (docs/board-lockdown.md,
+step 1); only if they really want it public, `config set allowPublicBoard true`.
+A warning about public repositories is explained in the same document. The
+`trusted-authors` warning goes away once step 5 is done. Items that are draft issues are
 reported as skipped: they cannot be claimed.
 
-## 7. Pharo warmup
+## 9. Pharo warmup
 
 Run `doctor` (without `--skip-pharo`). If `pharo-launcher` or `plexus` is red or
 warns that Pharo Launcher is missing, go back to step 3 before continuing.
@@ -96,7 +136,7 @@ Then `warmup`. The first run downloads
 the Pharo template and builds the PLexus base image, which can take minutes;
 doing it now keeps the first morning fast.
 
-## 8. Scheduler
+## 10. Scheduler
 
 Explain what the job does (calls `tick` every 10 minutes, window-aware, no
 network before the claim window) and ask before installing. Show the plan with
@@ -107,8 +147,10 @@ On macOS also show, without running it, the optional wake suggestion
 mention `claude setup-token` and `CLAUDE_CODE_OAUTH_TOKEN`, which the user
 must configure themselves.
 
-## 9. Rehearsal
+## 11. Rehearsal
 
 Run `tick --dry-run --now <tomorrow>T<window start + 10 minutes>:00Z` (use the
 team time zone offset) and summarise what would be claimed. Nothing is posted.
+If the answer says `empty-trust-list` or lists tasks under `untrusted`, explain
+that the trusted-authors list (step 5) is why nothing would be claimed.
 Finish by pointing to `/clode-inactivity:status`.

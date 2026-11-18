@@ -87,3 +87,30 @@ export async function loadBoard(ctx, project, opts = {}) {
 export function rosterEntry(team, login) {
   return (team.roster ?? []).find((m) => m.login.toLowerCase() === String(login).toLowerCase()) ?? null;
 }
+
+/**
+ * Board exposure report of one project (docs/design.md 4.7): is the board public, are the task and policy
+ * repos public, which teams can see the board. Best effort: whatever the token cannot read degrades to
+ * 'unknown' with a hint; only auth errors propagate.
+ * @param {any} ctx @param {any} github @param {any} project config project entry @param {any} projectInfo from resolveProject
+ */
+export async function checkExposure(ctx, github, project, projectInfo) {
+  const exposure = await import("./exposure.js");
+  const access = typeof github.projectAccess === "function"
+    ? await github.projectAccess(projectInfo)
+    : { public: projectInfo?.public ?? null, teams: null, repositories: null, collaborators: "unknown", status: "unknown", hint: null };
+  const unique = new Map();
+  for (const repo of Object.keys(project.repos ?? {})) unique.set(repo.toLowerCase(), { repo, role: "task" });
+  if (project.policy?.repo && !unique.has(project.policy.repo.toLowerCase())) unique.set(project.policy.repo.toLowerCase(), { repo: project.policy.repo, role: "policy" });
+  const repos = [...unique.values()];
+  for (const r of repos) {
+    try {
+      const info = typeof github.repoInfo === "function" ? await github.repoInfo(r.repo) : null;
+      if (info) Object.assign(r, { isPrivate: info.isPrivate ?? null, visibility: info.visibility ?? null });
+    } catch (error) {
+      if (/** @type {any} */ (error)?.code === "auth") throw error;
+      r.error = String(/** @type {any} */ (error)?.message ?? error).slice(0, 120);
+    }
+  }
+  return exposure.assessExposure({ projectId: project.id, projectInfo, access, repos, allowPublicBoard: exposure.allowsPublicBoard(ctx.config, project) });
+}

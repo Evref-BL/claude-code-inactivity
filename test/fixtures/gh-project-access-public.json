@@ -1,0 +1,30 @@
+{
+  "_comment": "// UNVERIFIED against live API: hand-written from the documented GraphQL shapes",
+  "data": {
+    "node": {
+      "public": true,
+      "closed": false,
+      "owner": {
+        "__typename": "Organization",
+        "login": "acme"
+      },
+      "teams": {
+        "nodes": []
+      },
+      "repositories": {
+        "nodes": [
+          {
+            "nameWithOwner": "acme/app",
+            "isPrivate": true,
+            "visibility": "PRIVATE"
+          },
+          {
+            "nameWithOwner": "acme/docs",
+            "isPrivate": false,
+            "visibility": "PUBLIC"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runDoctor } from "./doctor.js";
 import { commandsMarkdownTable, formatText, renderCommandHelp, renderHelp } from "./help.js";
-import { fail, loadBoard, loadTeam, makeGithub, requireOnline } from "./context.js";
+import { checkExposure, fail, loadBoard, loadTeam, makeGithub, requireOnline } from "./context.js";
 import { ensurePrivateDir } from "./util.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -313,6 +313,64 @@ async function cmdConfig(ctx) {
   }
 }
 
+/**
+ * `trust add|remove|list`: this member's own whitelist of GitHub logins (config `trustedAuthors`). Local to this
+ * machine, never shared and never part of team.json. Empty by default: nothing is claimed or run until logins are added.
+ */
+async function cmdTrust(ctx) {
+  const [sub, ...args] = ctx.positionals;
+  const trust = await ctx.mod("trust");
+  const raw = await ctx.readRaw();
+  const current = Array.isArray(raw.trustedAuthors) ? raw.trustedAuthors : [];
+  const normalized = () => {
+    if (!args.length) throw fail("usage", `Usage: inactivity trust ${sub} <login>...`);
+    return args.map((arg) => {
+      const n = trust.normalizeLogin(arg);
+      if (!n.ok) throw fail("usage", n.error);
+      return n.login;
+    });
+  };
+  const save = async (next) => {
+    if (!ctx.dryRun) await ctx.saveRaw({ ...raw, trustedAuthors: next });
+  };
+  const base = { ok: true, command: "trust", saved: false };
+  const dry = ctx.dryRun ? { dryRun: true } : {};
+  switch (sub) {
+    case "add": {
+      const wanted = normalized();
+      const have = new Set(current.map((x) => String(x).toLowerCase()));
+      const added = [];
+      const already = [];
+      for (const login of wanted) {
+        if (have.has(login) || added.includes(login)) already.push(login);
+        else added.push(login);
+      }
+      const next = [...current, ...added];
+      await save(next);
+      const bots = added.filter((l) => l.endsWith("[bot]"));
+      return {
+        ...base, action: "add", added, alreadyTrusted: already, trustedAuthors: next, saved: !ctx.dryRun && added.length > 0, ...dry,
+        ...(bots.length ? { warning: `${bots.join(", ")} ${bots.length > 1 ? "are GitHub Apps" : "is a GitHub App"}: every issue it opens will be executed on this machine.` } : {}),
+        note: "Your own list: kept in your config only, not shared with the team. Applies to the author and to the last editor of each task.",
+      };
+    }
+    case "remove": {
+      const wanted = new Set(normalized());
+      const removed = current.filter((x) => wanted.has(String(x).toLowerCase())).map((x) => String(x).toLowerCase());
+      const next = current.filter((x) => !wanted.has(String(x).toLowerCase()));
+      const notFound = [...wanted].filter((l) => !removed.includes(l));
+      await save(next);
+      return { ...base, action: "remove", removed, notFound, trustedAuthors: next, saved: !ctx.dryRun && removed.length > 0, ...dry, ...(next.length === 0 ? { warning: `The list is now empty: nothing will be claimed or executed. ${trust.TRUST_HINT}` } : {}) };
+    }
+    case "list": {
+      const list = [...trust.trustSet(current)];
+      return { ...base, action: "list", trustedAuthors: list, count: list.length, ...(list.length === 0 ? { warning: `No trusted author: nothing is claimed or executed. ${trust.TRUST_HINT}` } : {}) };
+    }
+    default:
+      throw fail("usage", "Usage: inactivity trust add <login>... | remove <login>... | list");
+  }
+}
+
 /** @param {string} id */
 const sanitizeId = (id) => id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
 
@@ -384,8 +442,19 @@ async function cmdProjects(ctx) {
       for (const n of names) if (!board.projectInfo.fields?.[n]) problems.push(`Field "${n}" absent (optional: labels or defaults apply).`);
       const onRoster = (board.team.roster ?? []).some((m) => m.login.toLowerCase() === board.login.toLowerCase());
       if (!onRoster) problems.push(`${board.login} is not on the team roster.`);
+      // Board lockdown (docs/board-lockdown.md): a public board is a failure unless allowPublicBoard is true.
+      const exposure = await checkExposure(ctx, board.github, project, board.projectInfo);
+      for (const finding of exposure.findings) if (finding.level === "fail") problems.push(finding.message);
+      // Trust whitelist: with no trusted author nothing is claimed or executed.
+      const trust = await ctx.mod("trust");
+      const trusted = [...trust.trustSet(config.trustedAuthors)];
+      const { untrusted } = trust.partitionByTrust(board.items, trusted);
+      if (!trusted.length) problems.push(`No trusted author configured (optional to fix here, but nothing is claimed or executed until you run: inactivity trust add <login>).`);
       const hard = problems.filter((p) => !p.includes("optional"));
-      return { ok: hard.length === 0, command: "projects", action: "check", id: project.id, title: board.projectInfo.title, login: board.login, teamSource: board.teamSource, cfg: board.cfg, cycle: board.cycle, fields, itemsByType: byType, skipped, onRoster, problems, _exit: hard.length ? 1 : 0 };
+      return {
+        ok: hard.length === 0, command: "projects", action: "check", id: project.id, title: board.projectInfo.title, login: board.login, teamSource: board.teamSource, cfg: board.cfg, cycle: board.cycle, fields, itemsByType: byType, skipped, onRoster, problems,
+        exposure, trust: { trustedAuthors: trusted, itemsFromUntrustedAuthors: untrusted.length }, _exit: hard.length ? 1 : 0,
+      };
     }
     default:
       throw fail("usage", "Usage: inactivity projects add|list|remove|check ...");
@@ -415,7 +484,7 @@ async function cmdTeam(ctx) {
         throw fail("invalid-team", `Cannot read ${arg}: ${/** @type {any} */ (error).message}`);
       }
       const result = policy.validateTeam(obj);
-      return { ok: result.ok, command: "team", action: "check", errors: result.errors, ...(result.ok ? { cfg: policy.digestTeam(result.team) } : {}), _exit: result.ok ? 0 : 1 };
+      return { ok: result.ok, command: "team", action: "check", errors: result.errors, ...(result.warnings?.length ? { warnings: result.warnings } : {}), ...(result.ok ? { cfg: policy.digestTeam(result.team) } : {}), _exit: result.ok ? 0 : 1 };
     }
     case "show": {
       const config = await ctx.loadConfig();
@@ -487,8 +556,13 @@ async function cmdClaim(ctx) {
     const { events: evs } = await events(ctx, board);
     const previous = round === 2 ? (await resolveBoard(ctx, board)).rounds?.[1] : undefined;
     const cands = claims.candidates({ items: board.items, team: board.team, cycle: board.cycle, round, events: evs, previous });
+    // Trust gate 1 of 3: only tasks from authors (and last editors) on MY whitelist are claimed.
+    const trust = await ctx.mod("trust");
+    const { trusted: trustedItems, untrusted } = trust.partitionByTrust(cands.items, config.trustedAuthors);
+    const untrustedSkips = untrusted.map((u) => ({ task: u.task, reason: u.reason === "empty-trust-list" ? "empty-trust-list" : "untrusted-author", author: u.author, ...(u.editor ? { editor: u.editor } : {}) }));
+    if (untrusted.length && trust.trustSet(config.trustedAuthors).size === 0) return { cycle: board.cycle, round, offer, posted: [], skipped: [{ task: null, reason: "empty-trust-list", hint: trust.TRUST_HINT }, ...untrustedSkips] };
     const existing = evs.filter((e) => e.member?.toLowerCase() === board.login.toLowerCase() && e.round === round);
-    const payloads = claims.buildClaims({ team: board.team, cycle: board.cycle, round, login: board.login, offer, candidates: cands.items, repoAllowlist: Object.keys(project.repos ?? {}), existing, hardDifficultyAllowed: config.availability?.hardDifficultyAllowed === true });
+    const payloads = claims.buildClaims({ team: board.team, cycle: board.cycle, round, login: board.login, offer, candidates: trustedItems, repoAllowlist: Object.keys(project.repos ?? {}), existing, hardDifficultyAllowed: config.availability?.hardDifficultyAllowed === true, trustedAuthors: config.trustedAuthors });
     const posted = [];
     const byTask = new Map(board.items.map((i) => [i.id, i]));
     for (const payload of payloads) {
@@ -502,7 +576,8 @@ async function cmdClaim(ctx) {
       posted.push({ task: payload.task, rank: payload.rank, commentUrl: item.url });
     }
     const postedIds = new Set(posted.map((p) => p.task));
-    const skippedTasks = cands.items.filter((i) => !postedIds.has(i.id)).map((i) => ({ task: i.id, reason: "not-selected" }));
+    const untrustedIds = new Set(untrusted.map((u) => u.task));
+    const skippedTasks = [...cands.items.filter((i) => !postedIds.has(i.id) && !untrustedIds.has(i.id)).map((i) => ({ task: i.id, reason: "not-selected" })), ...untrustedSkips];
     return { cycle: board.cycle, round, offer, posted, skipped: skippedTasks };
   });
   return { ok: true, command: "claim", ...(ctx.dryRun ? { dryRun: true } : {}), projects };
@@ -525,7 +600,16 @@ async function cmdResolve(ctx) {
       const { events: evs } = await events(ctx, board);
       const byTask = new Map(board.items.map((i) => [i.id, i]));
       const posted = [];
+      const assignSkipped = [];
+      const trust = await ctx.mod("trust");
       for (const assignment of mine) {
+        // Trust gate 2 of 3: never acknowledge (and set Status = Claimed on) a task that is not from MY trusted authors.
+        const candidate = byTask.get(assignment.task);
+        const verdict = trust.checkItemTrust(candidate ?? {}, ctx.config.trustedAuthors);
+        if (!verdict.trusted) {
+          assignSkipped.push({ task: assignment.task, reason: verdict.reason, detail: verdict.detail });
+          continue;
+        }
         const round = resolution.final[assignment.task]?.round ?? 1;
         const already = evs.some((e) => e.kind === "assign" && e.task === assignment.task && e.round === round && e.member?.toLowerCase() === board.login.toLowerCase());
         if (already) continue;
@@ -546,6 +630,7 @@ async function cmdResolve(ctx) {
         await ctx.deps.sleep(ctx.config.execution?.mutationDelayMs ?? 1500);
       }
       result.assignPosted = posted;
+      if (assignSkipped.length) result.assignSkipped = assignSkipped;
     }
     return result;
   });
@@ -591,6 +676,7 @@ async function cmdRun(ctx) {
     const record = await runner.runTask(ctx.deps, { config, project, team: board.team, task, projectInfo: board.projectInfo, github, login: board.login, cycle: board.cycle, round, assignment, dryRun: ctx.dryRun, keep: Boolean(ctx.flags.keep), noPr: Boolean(ctx.flags["no-pr"]), forced: forced || Boolean(ctx.flags.force) });
     const result = { command: "run", ...(ctx.dryRun ? { dryRun: true } : {}), runId: record.runId, outcome: record.outcome, reason: record.reason ?? null, pr: record.pr ?? null, branch: record.branch ?? null, costUsd: record.costUsd ?? null, numTurns: record.numTurns ?? null, runDir: record.runDir ?? null };
     if (!ctx.dryRun && record.runId) await recordManualRun(ctx, project, board, assignment, round, record);
+    if (record.reason === "untrusted-author") return { ok: false, code: "untrusted-author", error: `${task.id} was not run: ${record.detail ?? "its author is not in your trusted authors"}. Nothing was executed.`, ...result, _exit: 1 };
     const taskLevel = ["failed", "blocked"].includes(record.outcome);
     if (taskLevel && INFRA_REASONS.has(record.reason)) return { ok: false, code: record.reason, error: `Run ${record.runId} stopped on an infrastructure problem (${record.reason}).`, ...result, _exit: 1 };
     return { ok: !taskLevel, ...result, _exit: taskLevel ? 4 : 0 };
@@ -637,6 +723,8 @@ async function cmdStatus(ctx) {
     const resolution = await resolveBoard(ctx, board);
     const { events: evs } = await events(ctx, board);
     const cands = claims.candidates({ items: board.items, team: board.team, cycle: board.cycle, round: 1, events: evs });
+    const trust = await ctx.mod("trust");
+    const split = trust.partitionByTrust(cands.items, config.trustedAuthors);
     const key = ledger.cycleKey(project.id, board.cycle);
     const local = state.cycles?.[key]?.assigned ?? {};
     const mine = claims.ownAssignments(resolution, board.login).map((a) => ({ ...a, local: local[a.task] ?? null }));
@@ -645,13 +733,16 @@ async function cmdStatus(ctx) {
       login: board.login,
       phases: { 1: board.phases.rounds[1], 2: board.phases.rounds[2], executionOpen: board.phases.executionOpen, executionEnd: board.phases.executionEnd },
       offer: policy.buildOffer({ config, team: board.team, login: board.login, now: board.now, state, round: 1 }),
-      candidates: cands.items.map((i) => ({ task: i.id, title: i.title, priority: policy.priorityOf(i, board.team), difficulty: policy.difficultyOf(i, board.team) })),
+      candidates: split.trusted.map((i) => ({ task: i.id, title: i.title, priority: policy.priorityOf(i, board.team), difficulty: policy.difficultyOf(i, board.team) })),
+      skippedUntrusted: split.untrusted.map((u) => ({ task: u.task, title: u.item.title, reason: u.reason, who: u.who, author: u.author, ...(u.editor ? { editor: u.editor } : {}) })),
       resolution: { final: resolution.final, unassigned: resolution.rounds[1]?.unassigned ?? [] },
       mine,
       skipped: board.skipped,
     };
   });
-  return { ok: true, command: "status", now: ctx.deps.now().toISOString(), limit: state.limit ?? { until: null, reason: null }, leaks: state.leaks?.length ?? 0, scheduler, runs, projects };
+  const trusted = [...(await ctx.mod("trust")).trustSet(config.trustedAuthors)];
+  const trust = { trustedAuthors: trusted, ...(trusted.length === 0 ? { warning: "No trusted author: nothing is claimed or executed. Run `inactivity trust add <login>`." } : {}) };
+  return { ok: true, command: "status", now: ctx.deps.now().toISOString(), trust, limit: state.limit ?? { until: null, reason: null }, leaks: state.leaks?.length ?? 0, scheduler, runs, projects };
 }
 
 /** @param {string} text @param {Date} now */
@@ -806,6 +897,7 @@ async function cmdCleanup(ctx) {
 export const commands = [
   { name: "init", summary: "Create the config directory and a default config.json.", usage: "inactivity init [--force]", flags: { force: { type: "boolean", description: "Overwrite an existing config." } }, run: cmdInit },
   { name: "config", summary: "Show, validate or edit the user config.", usage: "inactivity config path|show|validate|set <dotted.key> <json-value>", flags: {}, run: cmdConfig },
+  { name: "trust", summary: "Manage YOUR whitelist of trusted GitHub logins (empty: nothing is claimed or run).", usage: "inactivity trust add <login>... | remove <login>... | list", flags: {}, run: cmdTrust },
   {
     name: "projects",
     summary: "Manage subscribed GitHub Projects boards.",

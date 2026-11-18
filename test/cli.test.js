@@ -84,7 +84,7 @@ function fakePolicyModule() {
   };
 }
 
-const ITEM = { itemId: "PVTI_1", issueNodeId: "I_1", id: "o/r#1", repo: "o/r", number: 1, title: "Fix parser", url: "https://github.com/o/r/issues/1", contentType: "Issue", comments: [] };
+const ITEM = { itemId: "PVTI_1", issueNodeId: "I_1", id: "o/r#1", repo: "o/r", number: 1, title: "Fix parser", url: "https://github.com/o/r/issues/1", contentType: "Issue", authorLogin: "maint", authorType: "User", comments: [] };
 
 function setup(overrides = {}) {
   const calls = { comments: [], statuses: [], runTask: [], runTick: [], installScheduler: [], uninstallScheduler: [], copyApp: [], warmup: [], cleanup: [], saveState: [], lockReleased: 0 };
@@ -258,6 +258,8 @@ async function withProject(h) {
   await fsp.writeFile(team, JSON.stringify(INLINE_TEAM));
   const r = await h.run("projects", "add", "--owner", "Evref-BL", "--number", "3", "--id", "p1", "--team-file", team, "--repo", "o/r", "--json");
   assert.equal(r.code, 0, r.stdout + r.stderr);
+  const trusted = await h.run("trust", "add", "maint", "--json");
+  assert.equal(trusted.code, 0, trusted.stdout + trusted.stderr);
 }
 
 // ---------------------------------------------------------------------------
@@ -713,4 +715,222 @@ test("doctor warns when loaded user settings widen the unattended agent, and say
   assert.equal(on.level, "warn");
   assert.deepEqual(on.detail.allow, ["Bash(*)"]);
   assert.deepEqual(on.detail.hooks, ["PreToolUse"]);
+});
+
+// ---------------------------------------------------------------------------
+// trust whitelist and board lockdown checks (docs/design.md 1.5, 4.7, docs/board-lockdown.md)
+
+test("trust add/list/remove: validated, normalized, de-duplicated, per member and local", async (t) => {
+  const h = await harness(t);
+  await h.run("init");
+  const read = async () => JSON.parse(await fsp.readFile(path.join(h.home, "config.json"), "utf8")).trustedAuthors;
+  const empty = await h.run("trust", "list", "--json");
+  assert.deepEqual([empty.code, empty.json.trustedAuthors, empty.json.count], [0, [], 0]);
+  assert.match(empty.json.warning, /nothing is claimed or executed/);
+
+  const added = await h.run("trust", "add", "@Alice", "bob", "ALICE", "--json");
+  assert.equal(added.code, 0, added.stdout);
+  assert.deepEqual(added.json.added, ["alice", "bob"]);
+  assert.deepEqual(added.json.alreadyTrusted, ["alice"]);
+  assert.deepEqual(await read(), ["alice", "bob"]);
+  assert.match(added.json.note, /not shared/);
+  const again = await h.run("trust", "add", "BOB", "--json");
+  assert.deepEqual([again.json.added, again.json.alreadyTrusted, again.json.saved], [[], ["bob"], false]);
+
+  const bot = await h.run("trust", "add", "Dependabot[bot]", "--json");
+  assert.deepEqual(bot.json.added, ["dependabot[bot]"]);
+  assert.match(bot.json.warning, /GitHub App/);
+
+  const listed = await h.run("trust", "list", "--json");
+  assert.deepEqual(listed.json.trustedAuthors, ["alice", "bob", "dependabot[bot]"]);
+  assert.equal(listed.json.warning, undefined);
+
+  const removed = await h.run("trust", "remove", "Alice", "carol", "--json");
+  assert.deepEqual([removed.json.removed, removed.json.notFound], [["alice"], ["carol"]]);
+  assert.deepEqual(await read(), ["bob", "dependabot[bot]"]);
+  const last = await h.run("trust", "remove", "bob", "dependabot[bot]", "--json");
+  assert.match(last.json.warning, /now empty/);
+  assert.deepEqual(await read(), []);
+
+  const text = await h.run("trust", "add", "zed");
+  assert.match(text.stdout, /added: zed/);
+});
+
+test("trust: syntax errors and missing arguments are usage errors; --dry-run saves nothing", async (t) => {
+  const h = await harness(t);
+  await h.run("init");
+  const before = await fsp.readFile(path.join(h.home, "config.json"), "utf8");
+  for (const args of [["trust"], ["trust", "add"], ["trust", "remove"], ["trust", "nope"], ["trust", "add", "bad login"], ["trust", "add", "ok", "-bad"], ["trust", "add", "a--b"], ["trust", "add", "org/team"]]) {
+    const r = await h.run(...args, "--json");
+    assert.equal(r.code, 2, args.join(" "));
+    assert.equal(r.json.code, "usage");
+  }
+  const dry = await h.run("trust", "add", "alice", "--dry-run", "--json");
+  assert.deepEqual([dry.code, dry.json.dryRun, dry.json.saved, dry.json.added], [0, true, false, ["alice"]]);
+  assert.equal(await fsp.readFile(path.join(h.home, "config.json"), "utf8"), before);
+  // without a config the command points to init
+  const bare = await harness(t);
+  const none = await bare.run("trust", "list", "--json");
+  assert.equal(none.json.code, "no-config");
+});
+
+test("doctor: an empty trusted-authors list is a warning with the fix, a filled one is ok", async (t) => {
+  const h = await harness(t);
+  await h.run("init");
+  const empty = await h.run("doctor", "--skip-pharo", "--json");
+  const check = empty.json.checks.find((c) => c.id === "trusted-authors");
+  assert.equal(check.level, "warn");
+  assert.match(check.message, /nothing will ever be claimed or executed/);
+  assert.match(check.fix, /inactivity trust add/);
+  await h.run("trust", "add", "alice", "--json");
+  const filled = await h.run("doctor", "--skip-pharo", "--json");
+  const ok = filled.json.checks.find((c) => c.id === "trusted-authors");
+  assert.equal(ok.level, "ok");
+  assert.match(ok.message, /alice/);
+});
+
+/** The default fake GitHub module with a board that is (or is not) public and repos of a given visibility. */
+function boardMods({ isPublic, repoPrivate = true, teams = [{ slug: "core", name: "Core" }], accessFails = false }) {
+  const base = setup().mods.github;
+  return {
+    github: {
+      ...base,
+      createGithub(...args) {
+        const g = base.createGithub(...args);
+        return {
+          ...g,
+          async resolveProject() {
+            return { ...(await g.resolveProject()), public: isPublic };
+          },
+          async projectAccess(project) {
+            if (accessFails) return { public: project.public, teams: null, repositories: null, collaborators: "unknown", status: "unknown", hint: "token cannot see the access list" };
+            return { public: project.public, teams, repositories: [], collaborators: "unknown", status: "ok", hint: "review Manage access by hand" };
+          },
+          async repoInfo() {
+            return { id: "R1", defaultBranch: "main", cloneUrl: "x", isPrivate: repoPrivate, visibility: repoPrivate ? "PRIVATE" : "PUBLIC" };
+          },
+        };
+      },
+    },
+  };
+}
+
+test("projects check: a PUBLIC board fails unless allowPublicBoard is true; teams are listed when readable", async (t) => {
+  const h = await harness(t, { mods: boardMods({ isPublic: true }) });
+  await withProject(h);
+  const r = await h.run("projects", "check", "p1", "--json");
+  assert.equal(r.code, 1, r.stdout);
+  assert.equal(r.json.ok, false);
+  assert.equal(r.json.exposure.level, "fail");
+  assert.equal(r.json.exposure.public, true);
+  assert.deepEqual(r.json.exposure.teams, ["core"]);
+  assert.ok(r.json.problems.some((p) => /PUBLIC/.test(p)));
+
+  // explicit per-project opt-in turns it into a warning
+  await h.run("config", "set", "projects.0.allowPublicBoard", "true", "--json");
+  const allowed = await h.run("projects", "check", "p1", "--json");
+  assert.equal(allowed.code, 0, allowed.stdout);
+  assert.equal(allowed.json.exposure.level, "warn");
+  assert.ok(allowed.json.exposure.findings.some((f) => f.code === "board-public-allowed"));
+});
+
+test("projects check: a private board passes; unreadable access is 'unknown' with a hint; a public repo warns", async (t) => {
+  const priv = await harness(t, { mods: boardMods({ isPublic: false, accessFails: true }) });
+  await withProject(priv);
+  const r = await priv.run("projects", "check", "p1", "--json");
+  assert.equal(r.code, 0, r.stdout);
+  assert.equal(r.json.exposure.level, "ok");
+  assert.equal(r.json.exposure.collaborators, "unknown");
+  const unknown = r.json.exposure.findings.find((f) => f.code === "board-access-unknown");
+  assert.match(unknown.fix, /cannot see/);
+  assert.deepEqual(r.json.trust.trustedAuthors, ["maint"]);
+
+  const pubRepo = await harness(t, { mods: boardMods({ isPublic: false, repoPrivate: false }) });
+  await withProject(pubRepo);
+  const w = await pubRepo.run("projects", "check", "p1", "--json");
+  assert.equal(w.code, 0, "a public repo is a warning, not a failure");
+  assert.equal(w.json.exposure.level, "warn");
+  assert.ok(w.json.exposure.findings.some((f) => f.code === "repo-public"));
+});
+
+test("doctor --online: board-exposure fails on a public board and passes on a private one", async (t) => {
+  const pub = await harness(t, { mods: boardMods({ isPublic: true }) });
+  await withProject(pub);
+  const bad = await pub.run("doctor", "--online", "--skip-pharo", "--json");
+  const check = bad.json.checks.find((c) => c.id === "board-exposure");
+  assert.equal(check.level, "fail");
+  assert.match(check.message, /PUBLIC/);
+  assert.match(check.fix, /board-lockdown\.md/);
+  assert.equal(bad.code, 3);
+
+  await pub.run("config", "set", "allowPublicBoard", "true", "--json");
+  const tolerated = await pub.run("doctor", "--online", "--skip-pharo", "--json");
+  assert.equal(tolerated.json.checks.find((c) => c.id === "board-exposure").level, "warn");
+
+  const priv = await harness(t, { mods: boardMods({ isPublic: false }) });
+  await withProject(priv);
+  const good = await priv.run("doctor", "--online", "--skip-pharo", "--json");
+  assert.equal(good.json.checks.find((c) => c.id === "board-exposure").level, "ok");
+  assert.equal(good.json.checks.find((c) => c.id === "projects-online").level, "ok");
+});
+
+test("claim: only tasks from my trusted authors are posted, and the empty list is explained", async (t) => {
+  const h = await harness(t);
+  await withProject(h); // trusts "maint", the author of the fake task
+  const ok = await h.run("claim", "--json");
+  assert.deepEqual(ok.json.projects[0].posted.map((p) => p.task), ["o/r#1"]);
+  await h.run("trust", "remove", "maint", "--json");
+  const none = await h.run("claim", "--json");
+  assert.deepEqual(none.json.projects[0].posted, []);
+  assert.equal(none.json.projects[0].skipped[0].reason, "empty-trust-list");
+  assert.match(none.json.projects[0].skipped[0].hint, /trust add/);
+  await h.run("trust", "add", "someone-else", "--json");
+  const other = await h.run("claim", "--json");
+  assert.deepEqual(other.json.projects[0].posted, []);
+  assert.deepEqual(other.json.projects[0].skipped.map((x) => [x.task, x.reason, x.author]), [["o/r#1", "untrusted-author", "maint"]]);
+});
+
+test("resolve --post-assign never acknowledges a task from an untrusted author", async (t) => {
+  const h = await harness(t);
+  await withProject(h);
+  await h.run("trust", "remove", "maint", "--json");
+  await h.run("trust", "add", "someone-else", "--json");
+  const r = await h.run("resolve", "--post-assign", "--json");
+  assert.equal(r.json.projects[0].assignPosted.length, 0);
+  assert.equal(r.json.projects[0].assignSkipped[0].reason, "untrusted-author");
+  assert.equal(h.calls.comments.length, 0);
+  assert.equal(h.calls.statuses.length, 0);
+});
+
+test("run: an untrusted-author release is an error with the explanation, never a success", async (t) => {
+  const h = await harness(t, { runRecord: { runId: "r1", outcome: "released", reason: "untrusted-author", detail: "the author @x is not in your trusted authors" } });
+  await withProject(h);
+  const r = await h.run("run", "--json");
+  assert.equal(r.code, 1);
+  assert.equal(r.json.code, "untrusted-author");
+  assert.match(r.json.error, /Nothing was executed/);
+});
+
+test("status lists the tasks skipped as untrusted, with the author", async (t) => {
+  const h = await harness(t);
+  await withProject(h);
+  await h.run("trust", "remove", "maint", "--json");
+  await h.run("trust", "add", "someone-else", "--json");
+  const s = await h.run("status", "--json");
+  assert.deepEqual(s.json.trust.trustedAuthors, ["someone-else"]);
+  assert.deepEqual(s.json.projects[0].candidates, []);
+  assert.deepEqual(s.json.projects[0].skippedUntrusted.map((u) => [u.task, u.reason, u.author]), [["o/r#1", "untrusted-author", "maint"]]);
+  await h.run("trust", "remove", "someone-else", "--json");
+  const empty = await h.run("status", "--json");
+  assert.match(empty.json.trust.warning, /No trusted author/);
+});
+
+test("team check reports the deprecated trustedAssociations key as a warning, not an error", async (t) => {
+  const h = await harness(t, { mods: { policy: { ...setup().mods.policy, validateTeam: (obj) => ({ ok: true, errors: [], warnings: obj.trustedAssociations ? [{ path: "/trustedAssociations", message: "deprecated" }] : [], team: { v: 1, ...obj } }) } } });
+  const file = path.join(h.home, "t.json");
+  await fsp.mkdir(h.home, { recursive: true });
+  await fsp.writeFile(file, JSON.stringify({ ...INLINE_TEAM, trustedAssociations: ["OWNER"] }));
+  const r = await h.run("team", "check", file, "--json");
+  assert.equal(r.code, 0);
+  assert.equal(r.json.warnings[0].path, "/trustedAssociations");
 });

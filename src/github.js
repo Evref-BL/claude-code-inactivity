@@ -64,8 +64,15 @@ const FIELD_VALUES = `fieldValues(first: 20) { nodes { __typename
   ... on ProjectV2ItemFieldSingleSelectValue { name optionId field { ... on ProjectV2FieldCommon { name } } }
   ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
 } }`
-const CONTENT_FIELDS = `id number title body url state updatedAt authorAssociation
+// editor + lastEditedAt: who last rewrote the body; titleEvents: who last renamed the issue (the trust
+// whitelist applies to them too, see trust.js). Shapes are UNVERIFIED against the live API (docs 9.9).
+const EDITOR = 'editor { login __typename }'
+const TITLE_EVENTS = `titleEvents: timelineItems(last: 1, itemTypes: [RENAMED_TITLE_EVENT]) { nodes { __typename
+    ... on RenamedTitleEvent { createdAt actor { login __typename } } } }`
+const CONTENT_FIELDS = `id number title body url state updatedAt authorAssociation lastEditedAt
   ${AUTHOR}
+  ${EDITOR}
+  ${TITLE_EVENTS}
   repository { nameWithOwner }
   labels(first: 30) { nodes { name } }
   comments(last: ${COMMENT_PAGE}) { totalCount pageInfo { hasPreviousPage startCursor } nodes { ${COMMENT_FIELDS} } }`
@@ -77,7 +84,7 @@ const ITEM_FIELDS = `fragment ItemFields on ProjectV2Item {
     ... on PullRequest { ${CONTENT_FIELDS} }
   }
 }`
-const PROJECT_FIELDS = `id title
+const PROJECT_FIELDS = `id title public closed
   fields(first: 50) { nodes {
     ... on ProjectV2Field { id name dataType }
     ... on ProjectV2IterationField { id name dataType }
@@ -107,7 +114,12 @@ ${ITEM_FIELDS}`,
   PolicyBlob: `query PolicyBlob($owner: String!, $name: String!, $expression: String!) {
   repository(owner: $owner, name: $name) { object(expression: $expression) { ... on Blob { text isTruncated isBinary } } } }`,
   RepoInfo: `query RepoInfo($owner: String!, $name: String!) {
-  repository(owner: $owner, name: $name) { id url defaultBranchRef { name } } }`,
+  repository(owner: $owner, name: $name) { id url isPrivate visibility defaultBranchRef { name } } }`,
+  ProjectAccess: `query ProjectAccess($projectId: ID!) {
+  node(id: $projectId) { ... on ProjectV2 { public closed
+    owner { __typename ... on Organization { login } ... on User { login } }
+    teams(first: 50) { nodes { slug name } }
+    repositories(first: 50) { nodes { nameWithOwner isPrivate visibility } } } } }`,
   AddComment: `mutation AddComment($subjectId: ID!, $body: String!) {
   addComment(input: { subjectId: $subjectId, body: $body }) { commentEdge { node { ${COMMENT_FIELDS} } } } }`,
   UpdateItemSelect: `mutation UpdateItemSelect($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
@@ -201,6 +213,7 @@ export function toBoardItem(node, team) {
   if (!repo) return { skipped: { itemId, reason: 'redacted' } }
   const comments = (content.comments?.nodes ?? []).filter(Boolean).map(normalizeComment)
   const total = content.comments?.totalCount ?? comments.length
+  const titleEvent = (content.titleEvents?.nodes ?? []).filter(Boolean).at(-1) ?? null
   return {
     item: {
       itemId,
@@ -214,7 +227,14 @@ export function toBoardItem(node, team) {
       contentType: isPr ? 'PullRequest' : 'Issue',
       state: content.state,
       authorLogin: content.author?.login ?? null,
+      authorType: content.author ? (content.author.__typename ?? 'User') : null,
       authorAssociation: content.authorAssociation ?? 'NONE',
+      lastEditedAt: content.lastEditedAt ?? null,
+      editorLogin: content.editor?.login ?? null,
+      editorType: content.editor ? (content.editor.__typename ?? 'User') : null,
+      titleEditedAt: titleEvent?.createdAt ?? null,
+      titleEditorLogin: titleEvent ? (titleEvent.actor?.login ?? null) : null,
+      titleEditorType: titleEvent?.actor ? (titleEvent.actor.__typename ?? 'User') : null,
       labels: (content.labels?.nodes ?? []).filter(Boolean).map((l) => l.name),
       fields: extractFields(node.fieldValues?.nodes, team),
       comments,
@@ -425,7 +445,7 @@ export function createGithub(deps, { token, apiUrl }) {
             fields[f.name] = { id: f.id, dataType: f.dataType }
             if (f.options) fields[f.name].options = Object.fromEntries(f.options.map((o) => [o.name, o.id]))
           }
-          return { id: project.id, title: project.title, ownerType: type, fields }
+          return { id: project.id, title: project.title, ownerType: type, public: typeof project.public === 'boolean' ? project.public : null, closed: typeof project.closed === 'boolean' ? project.closed : null, fields }
         } catch (error) {
           if (error instanceof GithubError && error.code === 'not-found') {
             lastError = error
@@ -513,7 +533,39 @@ export function createGithub(deps, { token, apiUrl }) {
       const data = await gql('RepoInfo', { owner, name })
       const r = data.repository
       if (!r) throw new GithubError('not-found', `Repository ${repo} not found`)
-      return { id: r.id, defaultBranch: r.defaultBranchRef?.name ?? null, cloneUrl: `${String(r.url).replace(/\/+$/, '')}.git` }
+      return {
+        id: r.id,
+        defaultBranch: r.defaultBranchRef?.name ?? null,
+        cloneUrl: `${String(r.url).replace(/\/+$/, '')}.git`,
+        isPrivate: typeof r.isPrivate === 'boolean' ? r.isPrivate : null,
+        visibility: r.visibility ?? null,
+      }
+    },
+
+    /**
+     * Who can see the board, best effort (docs/design.md 4.7). `public` comes from the project itself; the
+     * linked teams and repositories come from a separate query that is allowed to fail: the GraphQL API
+     * does not expose the project's direct collaborators at all (only a mutation), so that list is always
+     * 'unknown' and the human has to read Project > Settings > Manage access (docs/board-lockdown.md).
+     * @param {ProjectInfo} project
+     * @returns {Promise<{public:boolean|null, teams:{slug:string,name:string}[]|null, repositories:{repo:string,isPrivate:boolean|null,visibility:string|null}[]|null, collaborators:'unknown', status:'ok'|'unknown', hint:string|null}>}
+     */
+    async projectAccess(project) {
+      const out = { public: typeof project.public === 'boolean' ? project.public : null, teams: null, repositories: null, collaborators: 'unknown', status: 'unknown', hint: null }
+      try {
+        const data = await gql('ProjectAccess', { projectId: project.id })
+        const node = data.node
+        if (!node) throw new GithubError('not-found', 'ProjectAccess: project not returned')
+        if (typeof node.public === 'boolean') out.public = node.public
+        out.teams = (node.teams?.nodes ?? []).filter(Boolean).map((t) => ({ slug: t.slug, name: t.name }))
+        out.repositories = (node.repositories?.nodes ?? []).filter(Boolean).map((r) => ({ repo: r.nameWithOwner, isPrivate: typeof r.isPrivate === 'boolean' ? r.isPrivate : null, visibility: r.visibility ?? null }))
+        out.status = 'ok'
+        out.hint = 'Direct collaborators of the board are not readable through the API: review Project > Settings > Manage access by hand.'
+      } catch (error) {
+        if (error instanceof GithubError && error.code === 'auth') throw error
+        out.hint = `Teams and linked repositories are not visible with this token (${clean(error?.message).slice(0, 160)}). Review Project > Settings > Manage access by hand.`
+      }
+      return out
     },
 
     /** @returns {Promise<Comment>} */

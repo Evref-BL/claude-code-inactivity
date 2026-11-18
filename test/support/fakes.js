@@ -82,6 +82,13 @@ export function fakeGithub({ clock, tokens, owner = 'acme', number = 7 }) {
     return id;
   };
 
+  /** Someone edits an issue (body and/or title): the board then reports the editor, as GitHub does. */
+  gh.edit = (id, { editor, body, title, renamedBy }) => {
+    const it = items.find((i) => i.id === id);
+    if (body !== undefined) { it.body = body; it.lastEditedAt = clock.now().toISOString(); it.editor = editor; }
+    if (title !== undefined) { it.title = title; it.titleEditor = renamedBy ?? editor; it.titleEditedAt = clock.now().toISOString(); }
+  };
+
   gh.setPolicy = (text, committedDate) => {
     policyHistory.push({ oid: `c${policyHistory.length + 1}`.padEnd(8, '0'), committedDate, text });
   };
@@ -107,7 +114,9 @@ export function fakeGithub({ clock, tokens, owner = 'acme', number = 7 }) {
     content: {
       __typename: 'Issue', id: it.issueNodeId, number: it.number, title: it.title, body: it.body, url: `https://github.com/${it.repo}/issues/${it.number}`,
       state: it.state, updatedAt: clock.now().toISOString(), authorAssociation: it.association,
-      author: { login: it.author, __typename: 'User' }, repository: { nameWithOwner: it.repo },
+      lastEditedAt: it.lastEditedAt ?? null, editor: it.editor ? { login: it.editor, __typename: it.editorType ?? 'User' } : null,
+      titleEvents: { nodes: it.titleEditor ? [{ __typename: 'RenamedTitleEvent', createdAt: it.titleEditedAt ?? clock.now().toISOString(), actor: { login: it.titleEditor, __typename: 'User' } }] : [] },
+      author: { login: it.author, __typename: it.authorType ?? 'User' }, repository: { nameWithOwner: it.repo },
       labels: { nodes: it.labels.map((name) => ({ name })) },
       comments: { totalCount: it.comments.length, pageInfo: { hasPreviousPage: false, startCursor: null }, nodes: it.comments.map(commentNode) },
     },

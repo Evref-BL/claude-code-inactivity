@@ -18,7 +18,14 @@
  * @property {'Issue'|'PullRequest'} contentType
  * @property {'OPEN'|'CLOSED'|'MERGED'} state
  * @property {string|null} authorLogin
- * @property {string} authorAssociation
+ * @property {string|null} authorType        GraphQL __typename of the author (User, Bot, Mannequin, ...)
+ * @property {string} authorAssociation      informational only: it never grants trust (see trust.js)
+ * @property {string|null} lastEditedAt      last edit of the issue body, null when never edited
+ * @property {string|null} editorLogin       who made that edit
+ * @property {string|null} editorType
+ * @property {string|null} titleEditedAt     last rename of the issue, null when never renamed
+ * @property {string|null} titleEditorLogin
+ * @property {string|null} titleEditorType
  * @property {string[]} labels
  * @property {{priority:string|null, difficulty:string|null, status:string|null, agent:string|null}} fields
  * @property {Comment[]} comments
@@ -26,7 +33,7 @@
  * @property {string} updatedAt
  */
 
-/** @typedef {{id:string, title:string, ownerType:'organization'|'user', fields:Record<string,{id:string, dataType:string, options?:Record<string,string>}>}} ProjectInfo */
+/** @typedef {{id:string, title:string, ownerType:'organization'|'user', public?:boolean|null, closed?:boolean|null, fields:Record<string,{id:string, dataType:string, options?:Record<string,string>}>}} ProjectInfo */
 /** @typedef {{capacity:number, models:Tier[]}} Offer */
 /** @typedef {{kind:string, payload:object, member:string, task:string, round:1|2, createdAt:string, databaseId:number, commentId:string}} ClaimEvent */
 /** @typedef {{task:string, member:string, model:Tier, difficulty:Difficulty, points:number, rank:number}} Assignment */

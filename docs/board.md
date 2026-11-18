@@ -31,9 +31,13 @@ Todo -> Claimed -> In progress -> In review -> Done (a human merges)
 ```
 
 A human setting Status to `Todo` is the approval gate. A task is a candidate
-only when it is open, `Todo` (or a stale `Claimed`), written by a trusted author
-(`OWNER`, `MEMBER`, `COLLABORATOR` by default, or someone on the roster) and
-not started today. Two task-level failures in seven days make a task ineligible
+only when it is open, `Todo` (or a stale `Claimed`) and not started today.
+Whether a member *claims* it is a personal decision: each member claims and runs
+only tasks whose author **and last editor** are on their own `trustedAuthors`
+list (`inactivity trust add <login>`, empty by default, so nothing runs until it
+is filled). A task nobody trusts receives no claim and stays `Todo`. Who may
+write to the board at all is a GitHub setting: see
+[board-lockdown.md](board-lockdown.md). Two task-level failures in seven days make a task ineligible
 until a human resets it.
 
 ## Difficulty to model and budget

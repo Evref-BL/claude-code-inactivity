@@ -6,7 +6,9 @@
       "url": "https://github.com/acme/app",
       "defaultBranchRef": {
         "name": "main"
-      }
+      },
+      "isPrivate": true,
+      "visibility": "PRIVATE"
     }
   }
 }

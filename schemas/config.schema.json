@@ -7,6 +7,13 @@
   "properties": {
     "version": { "const": 1 },
     "login": { "type": ["string", "null"], "description": "GitHub login; null = discovered with viewer{login} and cached in state." },
+    "trustedAuthors": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^@?[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(\\[bot\\])?$" },
+      "default": [],
+      "description": "THIS member's own whitelist of GitHub logins whose tasks are claimed and run (case-insensitive; a GitHub App is written 'name[bot]'). Empty by default: nothing is claimed or executed until logins are added. Applied when building claims, when an assignment arrives, and at the runner start gate (author and last editor of the issue). Never shared, never in team.json."
+    },
+    "allowPublicBoard": { "type": "boolean", "default": false, "description": "Tolerate a PUBLIC project board (doctor and `projects check` fail on one otherwise). A project entry may override it." },
     "projects": {
       "type": "array",
       "items": {
@@ -16,6 +23,7 @@
           "enabled": { "type": "boolean", "default": true },
           "owner": { "type": "string" },
           "ownerType": { "enum": ["organization", "user", null], "default": null },
+          "allowPublicBoard": { "type": "boolean", "description": "Overrides the global allowPublicBoard for this project." },
           "number": { "type": "integer", "minimum": 1 },
           "policy": {
             "type": "object", "required": ["repo"], "additionalProperties": false,

@@ -43,6 +43,8 @@ agent cannot change this file or `.github/**`. See `docs/board.md`.
 
 Draft issues (no comments possible), pull requests, tasks without a way to
 verify, anything needing credentials, network access, a GUI, a decision from a
-human, repo-wide refactors, or changes to CI. Issues written by people outside
-the trusted associations are skipped until a trusted author recreates or
-re-labels them. Mark such work `Blocked` or leave it out of `Todo`.
+human, repo-wide refactors, or changes to CI. Issues written (or last edited) by
+someone who is not on a member's own trusted-authors list are skipped by that
+member until a trusted author recreates them: editing a vetted issue as someone
+else makes it untrusted again, so let the author edit it. Mark such work
+`Blocked` or leave it out of `Todo`.

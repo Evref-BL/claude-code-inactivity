@@ -33,7 +33,7 @@
     "difficultyModel": { "type": "object", "default": { "easy": "haiku", "medium": "sonnet", "hard": "opus" } },
     "difficultyCost": { "type": "object", "default": { "easy": 1, "medium": 2, "hard": 4 }, "description": "Points consumed from a member's capacity." },
     "effort": { "type": "object", "default": { "haiku": "low", "sonnet": "medium", "opus": "high" } },
-    "trustedAssociations": { "type": "array", "items": { "enum": ["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR","FIRST_TIME_CONTRIBUTOR","FIRST_TIMER","MANNEQUIN","NONE"] }, "default": ["OWNER", "MEMBER", "COLLABORATOR"] },
+    "trustedAssociations": { "type": "array", "deprecated": true, "description": "DEPRECATED and ignored. Trust is a per-member whitelist (config 'trustedAuthors'), not a shared team setting." },
     "includePullRequests": { "type": "boolean", "default": false },
     "labelFallbacks": { "type": "boolean", "default": true },
     "maxClaimsPerMember": { "type": "integer", "minimum": 1, "maximum": 50, "default": 8 },

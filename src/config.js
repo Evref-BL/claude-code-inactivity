@@ -3,6 +3,7 @@
 import path from 'node:path';
 import { DispatchError, atomicWriteJson } from './util.js';
 import { validateTeam, TIERS, DIFFICULTIES, WEEKDAYS, EFFORTS } from './policy.js';
+import { normalizeLogin } from './trust.js';
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const nonEmpty = (v) => typeof v === 'string' && v.trim() !== '';
@@ -40,6 +41,11 @@ export function defaultConfig() {
   return {
     version: 1,
     login: null,
+    // This member's own whitelist of GitHub logins whose tasks they accept (docs/design.md 1.5, src/trust.js).
+    // Empty = secure by default: nothing is claimed or executed until logins are added.
+    trustedAuthors: [],
+    // Opt-in: tolerate a PUBLIC project board (doctor and `projects check` fail on one otherwise). A project may override it.
+    allowPublicBoard: false,
     projects: [],
     availability: {
       paused: false,
@@ -132,13 +138,27 @@ export function validateConfig(input) {
     return res;
   };
 
-  const TOP = ['$schema', 'version', 'login', 'projects', 'availability', 'modelOverrides', 'effort', 'execution',
+  const TOP = ['$schema', 'version', 'login', 'trustedAuthors', 'allowPublicBoard', 'projects', 'availability', 'modelOverrides', 'effort', 'execution',
     'permissions', 'pharo', 'claude', 'git', 'github', 'schedule', 'dryRun'];
   for (const k of Object.keys(src)) if (!TOP.includes(k)) err(`/${k}`, 'unknown property');
 
   if (src.version !== 1) err('/version', 'must be 1');
   out.login = strOrNull(src.login, '/login', null);
   if (out.login !== null && !nonEmpty(out.login)) { err('/login', 'must not be empty (use null to discover it)'); out.login = null; }
+
+  // Trusted authors: member-private whitelist, stored normalized (lower case, no '@'), de-duplicated.
+  out.trustedAuthors = [];
+  if (src.trustedAuthors !== undefined) {
+    if (!Array.isArray(src.trustedAuthors)) err('/trustedAuthors', 'must be an array of GitHub logins');
+    else {
+      src.trustedAuthors.forEach((entry, i) => {
+        const n = normalizeLogin(entry);
+        if (!n.ok) err(`/trustedAuthors/${i}`, n.error);
+        else if (!out.trustedAuthors.includes(n.login)) out.trustedAuthors.push(n.login);
+      });
+    }
+  }
+  out.allowPublicBoard = bool(src.allowPublicBoard, '/allowPublicBoard', false);
 
   // Projects
   out.projects = [];
@@ -150,7 +170,7 @@ export function validateConfig(input) {
       const p = `/projects/${i}`;
       if (!isObj(pr)) { err(p, 'must be an object'); return; }
       for (const k of Object.keys(pr)) {
-        if (!['id', 'enabled', 'owner', 'ownerType', 'number', 'policy', 'team', 'repos'].includes(k)) err(`${p}/${k}`, 'unknown property');
+        if (!['id', 'enabled', 'owner', 'ownerType', 'number', 'policy', 'team', 'repos', 'allowPublicBoard'].includes(k)) err(`${p}/${k}`, 'unknown property');
       }
       const proj = {};
       if (typeof pr.id !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,31}$/.test(pr.id)) {
@@ -158,6 +178,7 @@ export function validateConfig(input) {
         proj.id = String(pr.id ?? '');
       } else if (ids.has(pr.id)) { err(`${p}/id`, `duplicate project id '${pr.id}'`); proj.id = pr.id; } else { ids.add(pr.id); proj.id = pr.id; }
       proj.enabled = bool(pr.enabled, `${p}/enabled`, true);
+      if (pr.allowPublicBoard !== undefined) proj.allowPublicBoard = bool(pr.allowPublicBoard, `${p}/allowPublicBoard`, false);
       proj.owner = nonEmpty(pr.owner) ? pr.owner : (err(`${p}/owner`, 'is required (non-empty string)'), '');
       proj.ownerType = oneOf(pr.ownerType, `${p}/ownerType`, ['organization', 'user', null], null);
       proj.number = Number.isInteger(pr.number) && pr.number >= 1 ? pr.number : (err(`${p}/number`, 'must be an integer >= 1'), 0);

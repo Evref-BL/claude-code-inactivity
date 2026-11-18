@@ -51,7 +51,9 @@ Requirements: Node >= 22.12, git, Claude Code >= 2.1.259 logged in, a GitHub
 token with `repo` and `project` scopes (`GH_TOKEN` or `gh auth login`), Pharo
 Launcher (used by PLexus, fetched with `npx`). No runtime npm dependencies.
 
-Step-by-step: [docs/setup.md](docs/setup.md).
+Step-by-step: [docs/setup.md](docs/setup.md). Before the first run add the GitHub
+logins you trust (`inactivity trust add <login>`) and restrict the board to your
+group ([docs/board-lockdown.md](docs/board-lockdown.md)).
 
 ## Plugin skills
 
@@ -69,6 +71,7 @@ Step-by-step: [docs/setup.md](docs/setup.md).
 | --- | --- |
 | `inactivity init [--force]` | Create the config directory and a default config.json. |
 | `inactivity config path\|show\|validate\|set <dotted.key> <json-value>` | Show, validate or edit the user config. |
+| `inactivity trust add <login>... \| remove <login>... \| list` | Manage YOUR whitelist of trusted GitHub logins (empty: nothing is claimed or run). |
 | `inactivity projects add --owner <o> --number <n> (--policy-repo <o/r> \| --team-file <f>) [--repo <o/r>[=url]]... \| list \| remove <id> \| check <id>` | Manage subscribed GitHub Projects boards. |
 | `inactivity team init [--out <file>] [--timezone <tz>] [--member <login>]... \| show \| check <file>` | Create, check or show the shared team policy. |
 | `inactivity doctor [--online] [--skip-pharo] [--smoke-claude]` | Check the environment (Node, claude, GitHub token, PLexus, scheduler). |
@@ -92,19 +95,36 @@ document: `{"ok":true,...}` or `{"ok":false,"code":"...","error":"..."}`.
 
 ## Configuration in one minute
 
-Per member, `config.json` (never contains secrets): subscribed projects and the
-repo allowlist, `availability` (days, `dailyPoints`, `maxTasksPerDay`, `models`,
+Per member, `config.json` (never contains secrets): **`trustedAuthors`** (your own
+whitelist of GitHub logins, empty by default: nothing is claimed or run until you
+add some, see "Security model"), subscribed projects and the
+repo allowlist, `allowPublicBoard`, `availability` (days, `dailyPoints`, `maxTasksPerDay`, `models`,
 `hardDifficultyAllowed`, `creditHeadroom`), execution limits per difficulty,
 `permissions`, `pharo`, `claude`, `git`. Per team, `.inactivity/team.json`
 in a policy repo: time zone, claim window (default 06:00-10:00), grace, start
 deadline, round 2, field names, priority weights, difficulty to model mapping,
-trusted authors, roster. Details in [docs/setup.md](docs/setup.md) and
+roster (trust is **not** shared: it is per member). Details in [docs/setup.md](docs/setup.md) and
 [docs/board.md](docs/board.md).
 
 ## Security model
 
-An unattended `claude -p` edits code from issue text. Mitigations: only trusted
-issue authors are executed, task text is wrapped as untrusted data, the agent has
+An unattended `claude -p` edits code from issue text, and anyone who can create or
+edit a task on the board could try to prompt-inject your Claude. Mitigations:
+
+- **Your own whitelist of trusted GitHub logins** (`inactivity trust add <login>...`,
+  stored in your config, never shared, **empty by default**: nothing is claimed
+  or executed until you add logins). It is checked three times on your machine:
+  when you build claims, when an assignment arrives, and right before a run on a
+  freshly fetched issue, where both the author **and the last editor** (body and
+  title) must be on your list, so an issue cannot be rewritten after it was
+  vetted. Being on the team roster or an organization member grants no trust.
+  Claim resolution does not depend on anybody's whitelist: a task nobody trusts
+  simply gets no claim.
+- **Lock the board down on GitHub** (private project, access limited to the
+  group, no outside collaborators): [docs/board-lockdown.md](docs/board-lockdown.md).
+  `inactivity projects check` and `doctor --online` fail on a public board.
+
+Other mitigations: task text is wrapped as untrusted data, the agent has
 no shell at all (`Read`/`Glob`/`Grep`/`Edit`/`Write` scoped to its worktree,
 secrets paths denied) and only an explicit list of Pharo inspection, edit, test
 and export tools (never `image_evaluate`, never the image lifecycle), the machine's
@@ -132,9 +152,9 @@ use Claude Code InActivity for the unattended runs.
 ## Troubleshooting
 
 Run `inactivity doctor --online`. Check ids: `node`, `config`, `projects`,
-`timezone`, `git`, `claude-cli`, `claude-auth`, `anthropic-api-key`,
+`trusted-authors`, `timezone`, `git`, `claude-cli`, `claude-auth`, `anthropic-api-key`,
 `claude-smoke`, `github-token`, `gh-cli`, `github-viewer`, `github-scopes`,
-`projects-online`, `npx`, `plexus`, `pharo-launcher`, `scheduler`,
+`board-exposure`, `projects-online`, `npx`, `plexus`, `pharo-launcher`, `scheduler`,
 `state-dir`, `disk`. Each failing check prints a `fix`. Leaked images or
 worktrees: `inactivity cleanup`.
 

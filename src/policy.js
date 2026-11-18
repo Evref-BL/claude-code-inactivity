@@ -10,9 +10,6 @@ export const TIERS = Object.freeze(['haiku', 'sonnet', 'opus']);
 export const DIFFICULTIES = Object.freeze(['easy', 'medium', 'hard']);
 export const WEEKDAYS = Object.freeze(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']);
 export const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
-export const ASSOCIATIONS = Object.freeze([
-  'OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR', 'FIRST_TIME_CONTRIBUTOR', 'FIRST_TIMER', 'MANNEQUIN', 'NONE',
-]);
 const HEADROOM = Object.freeze({ low: 0.5, normal: 1, high: 1.5 });
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const TOP_KEYS = new Set([
@@ -50,7 +47,6 @@ export function teamDefaults() {
     difficultyModel: { easy: 'haiku', medium: 'sonnet', hard: 'opus' },
     difficultyCost: { easy: 1, medium: 2, hard: 4 },
     effort: { haiku: 'low', sonnet: 'medium', opus: 'high' },
-    trustedAssociations: ['OWNER', 'MEMBER', 'COLLABORATOR'],
     includePullRequests: false,
     labelFallbacks: true,
     maxClaimsPerMember: 8,
@@ -61,16 +57,23 @@ export function teamDefaults() {
 /**
  * Validate and normalize a team policy (4.3). Always returns a best-effort `team`
  * object (null only when the input is not an object).
+ *
+ * `trustedAssociations` is DEPRECATED: it used to grant trust to issue authors by GitHub association.
+ * Trust is now a per-member whitelist (`trustedAuthors` in the user config, see trust.js), so the key is
+ * still accepted in an existing team.json but ignored (a warning is returned) and is not part of the
+ * normalized team, hence not of the shared `cfg` digest.
  * @param {unknown} input
- * @returns {{ok:boolean, errors:{path:string,message:string}[], team:object|null}}
+ * @returns {{ok:boolean, errors:{path:string,message:string}[], warnings:{path:string,message:string}[], team:object|null}}
  */
 export function validateTeam(input) {
   /** @type {{path:string,message:string}[]} */
   const errors = [];
+  /** @type {{path:string,message:string}[]} */
+  const warnings = [];
   const err = (path, message) => errors.push({ path, message });
   if (!isObj(input)) {
     err('', 'team policy must be an object');
-    return { ok: false, errors, team: null };
+    return { ok: false, errors, warnings, team: null };
   }
   const d = teamDefaults();
   const src = /** @type {Record<string, any>} */ (input);
@@ -203,7 +206,10 @@ export function validateTeam(input) {
   team.effort = {};
   for (const t of TIERS) team.effort[t] = readEnum(ef[t], `/effort/${t}`, EFFORTS, d.effort[t]);
 
-  team.trustedAssociations = readEnumList(src.trustedAssociations, '/trustedAssociations', ASSOCIATIONS, d.trustedAssociations);
+  if (src.trustedAssociations !== undefined) {
+    if (!Array.isArray(src.trustedAssociations)) err('/trustedAssociations', 'must be an array (deprecated and ignored anyway)');
+    else warnings.push({ path: '/trustedAssociations', message: "deprecated and ignored: trust is a per-member whitelist (`inactivity trust add <login>`, config 'trustedAuthors'); remove this key" });
+  }
   team.includePullRequests = readBool(src.includePullRequests, '/includePullRequests', d.includePullRequests);
   team.labelFallbacks = readBool(src.labelFallbacks, '/labelFallbacks', d.labelFallbacks);
   team.maxClaimsPerMember = readInt(src.maxClaimsPerMember, '/maxClaimsPerMember', 1, 50, d.maxClaimsPerMember);
@@ -236,7 +242,7 @@ export function validateTeam(input) {
       });
     });
   }
-  return { ok: errors.length === 0, errors, team };
+  return { ok: errors.length === 0, errors, warnings, team };
 }
 
 /**
@@ -375,16 +381,6 @@ export function sortCandidates(items, team) {
     || a.item.number - b.item.number
     || compareStrings(String(a.item.id ?? ''), String(b.item.id ?? '')));
   return keyed.map((k) => k.item);
-}
-
-/**
- * Author gate: trusted association, or author on the roster.
- * @returns {boolean}
- */
-export function isTrustedAuthor(item, team) {
-  if (team.trustedAssociations.includes(item.authorAssociation)) return true;
-  const login = item.authorLogin ? norm(item.authorLogin) : null;
-  return login !== null && team.roster.some((m) => m.login === login);
 }
 
 /**

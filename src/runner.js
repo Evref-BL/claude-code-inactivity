@@ -12,6 +12,7 @@ import {
   sanitizeText,
 } from './prompt.js';
 import { PRIVATE_FILE_MODE, redact } from './util.js';
+import { checkItemTrust } from './trust.js';
 
 export const DEFAULT_FORBIDDEN_PATHS = ['.github/**', '.inactivity.json', '**/.git/**', '*.pem', '.env*'];
 export const DEFAULT_MAX_CHANGED_FILES = 200;
@@ -60,12 +61,13 @@ class StepFailure extends Error {
   }
 }
 
-/** A deliberate stop that is not a failure (gate refused, lost lock). */
+/** A deliberate stop that is not a failure (gate refused, lost lock). `outcome` is 'skipped' unless the task was released. */
 class Abort extends Error {
-  constructor(reason, detail) {
+  constructor(reason, detail, outcome = 'skipped') {
     super(detail ? `${reason}: ${detail}` : reason);
     this.reason = reason;
     this.detail = detail ?? '';
+    this.outcome = outcome;
   }
 }
 
@@ -292,6 +294,9 @@ export async function runTask(deps, params) {
   let mutations = 0;
   let state = params.state ?? null;
   let runDir = null;
+  // Title and body that passed the trust gate. Everything executed or published comes from THIS copy (freshly
+  // read from GitHub), never from the possibly stale `task`: otherwise an edit made after the check would run.
+  let work = task;
 
   const persist = async () => {
     if (!runDir) return;
@@ -392,17 +397,36 @@ export async function runTask(deps, params) {
       });
       await ledger.appendLedger(deps, stateDir, {
         event: 'start', at: record.startedAt, runId: run.runId, project: record.project, task: task.id,
-        member: login, cycle, round, model: record.model, difficulty, title: sanitizeLine(task.title, 120),
+        member: login, cycle, round, model: record.model, difficulty, title: sanitizeLine(work.title, 120),
       });
     });
 
     // 2. start gate
     await step('start-gate', 'internal', async () => {
-      if (!forced) checkGate(await github.getItem(projectInfo, team, task.itemId));
+      const fresh = await github.getItem(projectInfo, team, task.itemId);
+      if (!forced) checkGate(fresh);
+      // Trust gate 3 of 3 (never bypassed, `--force` included): the author AND the last editor of the freshly
+      // fetched issue must be on THIS member's whitelist, otherwise nothing runs.
+      const verdict = checkItemTrust(fresh, config.trustedAuthors);
+      if (!verdict.trusted) {
+        if (forced) throw new Abort('untrusted-author', verdict.detail);
+        try {
+          await postLifecycle('release', { reason: 'untrusted-author' });
+          await setStatus({ status: statusValues.ready ?? 'Todo', agent: '' });
+        } catch (err) {
+          deps.log.warn(`release(untrusted-author) failed: ${err?.message ?? err}`);
+        }
+        throw new Abort('untrusted-author', verdict.detail, 'released');
+      }
+      work = { ...task, title: fresh.title, body: fresh.body };
       await postLifecycle('start', { model: chosen.tier });
       ctx.startPosted = true;
+      // Second read, after `start` is posted: it detects a lost lock, and an edit made in between.
+      const after = await github.getItem(projectInfo, team, task.itemId);
+      const verdictAfter = checkItemTrust(after, config.trustedAuthors);
+      if (!verdictAfter.trusted) throw failure('untrusted-author', verdictAfter.detail);
+      work = { ...task, title: after.title, body: after.body };
       if (!forced) {
-        const after = await github.getItem(projectInfo, team, task.itemId);
         const first = claims.earliestStart({ events: eventsOf(after).filter((e) => e.task === task.id), task: task.id, cycle });
         if (first && lower(first.member) !== lower(login)) {
           try {
@@ -428,7 +452,7 @@ export async function runTask(deps, params) {
         if (leak) leak.mirror = ctx.mirrorPath;
       });
       const taken = await takenBranches(ctx.mirrorPath);
-      record.branch = gitwork.branchName({ prefix: branchPrefix, login, number: task.number, title: task.title, taken });
+      record.branch = gitwork.branchName({ prefix: branchPrefix, login, number: task.number, title: work.title, taken });
       ctx.worktreeCreated = true; // removal is attempted even if createWorktree fails halfway
       const wt = await gitwork.createWorktree(deps, { mirrorPath: ctx.mirrorPath, workDir: ctx.workDir, branch: record.branch, base });
       ctx.workDir = wt.path ?? ctx.workDir;
@@ -457,8 +481,8 @@ export async function runTask(deps, params) {
 
     // 6. prompt files
     const userPrompt = await step('prompt', 'internal', async () => {
-      const system = buildSystemPrompt({ task, repoConfig: decl, difficulty });
-      const user = buildUserPrompt({ task, difficulty });
+      const system = buildSystemPrompt({ task: work, repoConfig: decl, difficulty });
+      const user = buildUserPrompt({ task: work, difficulty });
       await deps.fs.writeFile(path.join(runDir, 'system.md'), system, PRIVATE_FILE);
       await deps.fs.writeFile(path.join(runDir, 'prompt.md'), user, PRIVATE_FILE);
       await deps.fs.writeFile(path.join(runDir, 'mcp.json'), `${JSON.stringify(pharo.claudeMcpConfig(config, record.scope, deps.env), null, 2)}\n`, PRIVATE_FILE);
@@ -573,12 +597,12 @@ export async function runTask(deps, params) {
       record.outcome = decided.outcome;
       record.reason = decided.reason;
       if (noPr) return; // `run --no-pr`: the branch is pushed, no pull request is opened
-      const body = buildPrBody({ task, run: record, resultBlock, verify: record.unverified ? null : verify });
+      const body = buildPrBody({ task: work, run: record, resultBlock, verify: record.unverified ? null : verify });
       const pr = await github.createPullRequest({
         repo: task.repo,
         base: ctx.base,
         head: record.branch,
-        title: `${sanitizeLine(task.title, 200)} (#${task.number})`,
+        title: `${sanitizeLine(work.title, 200)} (#${task.number})`,
         body,
         draft: true,
       });
@@ -599,7 +623,7 @@ export async function runTask(deps, params) {
     record.headCommit = await gitwork.commitAll(deps, {
       path: ctx.workDir,
       login,
-      title: sanitizeLine(`${prefix}${task.title}`, 200),
+      title: sanitizeLine(`${prefix}${work.title}`, 200),
       number: task.number,
       summary,
       runId: record.runId,
@@ -618,7 +642,7 @@ export async function runTask(deps, params) {
     fin = await mainFlow();
   } catch (err) {
     if (err instanceof Abort) {
-      fin = { outcome: 'skipped', reason: err.reason, detail: err.detail };
+      fin = { outcome: err.outcome ?? 'skipped', reason: err.reason, detail: err.detail };
     } else {
       const f = asFailure(err, 'internal');
       fin = {

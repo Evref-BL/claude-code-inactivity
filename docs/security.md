@@ -6,10 +6,39 @@ threat table is in section 1.5 of [design.md](design.md).
 
 ## What protects you
 
-- **Trusted authors only.** Issues are executed only when the author is a
-  `trustedAssociations` member (default OWNER, MEMBER, COLLABORATOR) or on the
-  roster, and a human set Status to `Todo`. Comments from non-roster authors
-  never enter the prompt.
+- **Your own whitelist of trusted GitHub logins.** Anyone who can create or edit
+  a task on the board could try to prompt-inject your Claude, so every member
+  keeps **their own** list (`trustedAuthors` in their config, managed with
+  `inactivity trust add|remove|list`). It is **empty by default**: nothing is
+  claimed or executed until you add logins, and the tool says so (`doctor` warns,
+  `tick` and `claim` report `empty-trust-list`, `status` shows the skipped tasks
+  with their author). It is applied on your machine at three points:
+  1. *building claims*: a task whose issue author is not on your list is never claimed;
+  2. *an assignment arrives*: the task is verified again, and released with the
+     reason `untrusted-author` (a `release` comment, Status back to `Todo`) if it
+     no longer passes (the list changed, the issue was edited);
+  3. *the runner start gate*, on a freshly fetched issue, `--force` included: the
+     author **and the last editor** of the body and the last person who renamed
+     the issue must all be on your list, otherwise the run is released with
+     `untrusted-author` and nothing starts (no clone, no image, no `claude`). What
+     the agent reads is exactly the text that passed this check.
+
+  Logins compare case-insensitively. A bot (a GitHub App) is trusted only when
+  listed explicitly with its `[bot]` suffix (`trust add dependabot[bot]`); a
+  mannequin or a deleted account never is. Neither the GitHub association (owner,
+  member, collaborator) nor the team roster grants trust: the roster is the group
+  that shares quota, your list is who you believe. The list is not shared (not in
+  `team.json`) and is not an input of claim resolution, which stays a
+  deterministic function every member computes identically: a task nobody trusts
+  simply receives no claim. A human still sets Status to `Todo`. Comments from
+  non-roster authors never enter the prompt. The deprecated `trustedAssociations`
+  key of an old `team.json` is ignored.
+- **A locked-down board.** Only the group should be able to read the board and
+  create or edit tasks on it: private project, access limited to a team, no outside
+  collaborators, protected branches, 2FA, periodic review. Humans do that in the
+  GitHub UI: [board-lockdown.md](board-lockdown.md). `projects check` and
+  `doctor --online` fail on a public board (unless `allowPublicBoard` is true) and
+  warn on public repositories.
 - **Untrusted data wrapper.** Issue title and body are escaped, truncated and
   placed in an `<untrusted_task_data>` block; the system prompt says it is data.
 - **Least authority for the agent.** Never `--dangerously-skip-permissions`,
@@ -77,13 +106,13 @@ threat table is in section 1.5 of [design.md](design.md).
 
 Pharo's `image_evaluate` tool is arbitrary code execution inside the image, and
 Smalltalk can shell out. It is **denied by default**, so a prompt injection that
-gets past the author gate cannot reach it. Only if you set
+gets past the trusted-author whitelist cannot reach it. Only if you set
 `permissions.allowImageEvaluate` (or add it through `extraAllowedTools`) does
 that risk come back, with the member's OS privileges. If you do:
 
 - run dispatch under a **dedicated OS user or machine** for team-wide use;
-- keep the trusted-author gate strict and review issues before moving them to
-  `Todo`;
+- keep your trusted-author list short (only people you would hand your keyboard
+  to) and review issues before moving them to `Todo`;
 - keep the repository allowlist small; use a token with the minimum scopes;
 - review every draft PR as untrusted code.
 

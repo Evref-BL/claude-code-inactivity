@@ -14,7 +14,12 @@ Read only: this skill never posts a comment and never starts a run.
    - cycle date and the state of round 1 and round 2 (pending, open, closed,
      resolved) with their times, and whether execution is open;
    - my offer (capacity in points, models) or why there is none (paused, day off, limit);
-   - candidate tasks: task, priority, difficulty;
+   - candidate tasks I would claim: task, priority, difficulty;
+   - tasks skipped as untrusted (`skippedUntrusted`): task, author (and last
+     editor when it differs), reason. If `trust.trustedAuthors` is empty say
+     plainly that nothing is claimed or executed until the user adds logins with
+     `trust add <login>` (suggest it, never run it unasked, never add an author
+     just because you saw their name on the board);
    - resolution: task, assignee, model, round; and the unassigned tasks with reasons;
    - my tasks with their local state (assigned, started, outcome, PR).
 3. Then the global lines: usage-limit state (`limit.until`), leaked runs, scheduler
